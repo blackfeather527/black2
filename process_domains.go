@@ -32,6 +32,7 @@ func main() {
     domainCount := 0
     for scanner.Scan() {
         domain := scanner.Text()
+        fmt.Printf("Read domain: %s\n", domain) 
         domainCount++
         wg.Add(1)
         go func(d string) {
@@ -92,21 +93,19 @@ func checkDomain(domain string) bool {
         },
     }
 
-    for _, scheme := range []string{"https", "http"} {
-        url := fmt.Sprintf("%s://%s", scheme, domain)
-        resp, err := client.Get(url)
-        if err != nil {
-            fmt.Printf("Error checking %s: %v\n", url, err)
-            continue
-        }
-        defer resp.Body.Close()
-
-        body, _ := ioutil.ReadAll(resp.Body)
-        if strings.Contains(string(body), "Sansui233") {
-            fmt.Printf("Domain %s is valid\n", domain)
-            return true
-        }
+    resp, err := client.Get(domain)
+    if err != nil {
+        fmt.Printf("Error checking %s: %v\n", domain, err)
+        return false
     }
+    defer resp.Body.Close()
+
+    body, _ := ioutil.ReadAll(resp.Body)
+    if strings.Contains(string(body), "Sansui233") {
+        fmt.Printf("Domain %s is valid\n", domain)
+        return true
+    }
+
     fmt.Printf("Domain %s is invalid\n", domain)
     return false
 }
@@ -131,21 +130,17 @@ func getSubContent(domain, path string) string {
         },
     }
 
-    for _, scheme := range []string{"https", "http"} {
-        url := fmt.Sprintf("%s://%s%s", scheme, domain, path)
-        resp, err := client.Get(url)
-        if err != nil {
-            fmt.Printf("Error getting content from %s: %v\n", url, err)
-            continue
-        }
-        defer resp.Body.Close()
-
-        body, _ := ioutil.ReadAll(resp.Body)
-        fmt.Printf("Successfully got content from %s\n", url)
-        return string(body)
+    url := domain + path
+    resp, err := client.Get(url)
+    if err != nil {
+        fmt.Printf("Error getting content from %s: %v\n", url, err)
+        return ""
     }
-    fmt.Printf("Failed to get content from %s%s\n", domain, path)
-    return ""
+    defer resp.Body.Close()
+
+    body, _ := ioutil.ReadAll(resp.Body)
+    fmt.Printf("Successfully got content from %s\n", url)
+    return string(body)
 }
 
 func decodeAndFilter(content, prefix string) []string {
