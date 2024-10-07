@@ -107,7 +107,6 @@ func processDomainFile(inputPath string) []Domain {
         if _, exists := domainMap[key]; !exists {
             domainMap[key] = domain
             validCount++
-            fmt.Printf("有效域名: %s://%s:%s\n", domain.Protocol, domain.Host, domain.Port)
         }
     }
 
@@ -174,7 +173,6 @@ func checkDomains(domains []Domain) []Domain {
 
             shouldCheck, failureCount := shouldCheckDomain(db, d)
             if !shouldCheck {
-                fmt.Printf("跳过域名 %s://%s:%s (失败次数: %d)\n", d.Protocol, d.Host, d.Port, failureCount)
                 return
             }
 
