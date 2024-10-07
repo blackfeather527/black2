@@ -49,7 +49,6 @@ func main() {
     domainCount := 0
     for scanner.Scan() {
         domain := scanner.Text()
-        fmt.Printf("Read domain: %s\n", domain)
         domainCount++
         wg.Add(1)
         go func(d string) {
@@ -126,12 +125,10 @@ func checkDomain(domain string) bool {
 
         body, _ := ioutil.ReadAll(resp.Body)
         if strings.Contains(string(body), "Sansui233") {
-            fmt.Printf("Domain %s is valid\n", domain)
             return true
         }
         break
     }
-    fmt.Printf("Domain %s is invalid\n", domain)
     return false
 }
 
