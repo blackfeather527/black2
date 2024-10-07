@@ -13,7 +13,7 @@ import (
 type Domain struct {
     Protocol string
     Host     string
-    Port     string // 只有非默认端口时才会有值
+    Port     string
 }
 
 func main() {
@@ -33,7 +33,7 @@ func main() {
     fmt.Printf("总共处理了 %d 个唯一有效域名\n", len(domains))
 }
 
-// processDomainFile 函数用于处理输入文件并返回唯一的有效域名列表
+// processDomainFile 函数用于处理输入文件并返回唯一有效的域名列表
 func processDomainFile(inputPath string) []Domain {
     file, err := os.Open(inputPath)
     if err != nil {
@@ -60,16 +60,11 @@ func processDomainFile(inputPath string) []Domain {
             continue
         }
 
-        // 创建一个唯一的键，忽略协议和默认端口
-        key := domain.Host
-        if domain.Port != "" {
-            key += ":" + domain.Port
-        }
-
+        key := domain.Host + ":" + domain.Port
         if _, exists := domainMap[key]; !exists {
             domainMap[key] = domain
             validCount++
-            fmt.Printf("有效域名: %s://%s%s\n", domain.Protocol, domain.Host, domain.Port)
+            fmt.Printf("有效域名: %s://%s:%s\n", domain.Protocol, domain.Host, domain.Port)
         }
     }
 
@@ -77,7 +72,6 @@ func processDomainFile(inputPath string) []Domain {
         fmt.Printf("读取文件时发生错误: %v\n", err)
     }
 
-    // 将 map 转换为 slice
     domains := make([]Domain, 0, len(domainMap))
     for _, domain := range domainMap {
         domains = append(domains, domain)
@@ -97,12 +91,14 @@ func parseDomain(line string) (Domain, bool) {
     domain := Domain{
         Protocol: u.Scheme,
         Host:     u.Hostname(),
+        Port:     u.Port(),
     }
 
-    // 只有非默认端口时才设置 Port
-    if u.Port() != "" {
-        if (u.Scheme == "http" && u.Port() != "80") || (u.Scheme == "https" && u.Port() != "443") {
-            domain.Port = u.Port()
+    if domain.Port == "" {
+        if domain.Protocol == "http" {
+            domain.Port = "80"
+        } else {
+            domain.Port = "443"
         }
     }
 
