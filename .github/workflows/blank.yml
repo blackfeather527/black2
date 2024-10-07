@@ -97,20 +97,6 @@ jobs:
         DOMAIN_COUNT=$(wc -l < /tmp/fofa_output/domains.txt)
         echo "找到的有效域名总数：$DOMAIN_COUNT"
 
-    - name: Remove duplicates
-      run: |
-        # 去除重复的域名（忽略协议，只比较域名和端口）
-        awk -F '[:/]' '{print $3 ":" (NF>3 ? $4 : "")}' /tmp/fofa_output/domains.txt | sort -u | while read -r line; do
-          grep -m1 ":*$line" /tmp/fofa_output/domains.txt
-        done > /tmp/fofa_output/domains_unique.txt
-
-        # 更新原文件
-        mv /tmp/fofa_output/domains_unique.txt /tmp/fofa_output/domains.txt
-
-        # 显示去重后的域名数量
-        UNIQUE_DOMAIN_COUNT=$(wc -l < /tmp/fofa_output/domains.txt)
-        echo "去重后的有效域名总数：$UNIQUE_DOMAIN_COUNT"
-
     - name: Process domains
       run: |
         # 创建输出目录并运行Go程序处理域名
