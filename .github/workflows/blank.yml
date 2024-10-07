@@ -22,8 +22,10 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y curl wget
+    - name: Initialize Go module and get dependencies
+      run: |
+        go mod init github.com/${{ github.repository }}
         go get golang.org/x/time/rate
-
     - name: Download Fofa-list
       run: |
         DOWNLOAD_URL=$(curl -s https://api.github.com/repos/Cl0udG0d/Fofa-hack/releases/latest | grep "browser_download_url.*fofa-hack_linux_amd64" | cut -d '"' -f 4)
