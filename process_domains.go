@@ -60,7 +60,11 @@ func processDomainFile(inputPath string) []Domain {
             continue
         }
 
-        key := domain.Host + ":" + domain.Port
+        key := domain.Host
+        if domain.Port != "80" && domain.Port != "443" {
+            key += ":" + domain.Port
+        }
+        
         if _, exists := domainMap[key]; !exists {
             domainMap[key] = domain
             validCount++
