@@ -13,7 +13,7 @@ import (
 type Domain struct {
     Protocol string
     Host     string
-    Port     string
+    Port     string // 只有非默认端口时才会有值
 }
 
 func main() {
@@ -30,10 +30,10 @@ func main() {
     domains := processDomainFile(*inputPath)
 
     // 在这里可以继续处理 domains 列表
-    fmt.Printf("总共处理了 %d 个有效域名\n", len(domains))
+    fmt.Printf("总共处理了 %d 个唯一有效域名\n", len(domains))
 }
 
-// processDomainFile 函数用于处理输入文件并返回有效的域名列表
+// processDomainFile 函数用于处理输入文件并返回唯一的有效域名列表
 func processDomainFile(inputPath string) []Domain {
     file, err := os.Open(inputPath)
     if err != nil {
@@ -42,7 +42,7 @@ func processDomainFile(inputPath string) []Domain {
     }
     defer file.Close()
 
-    var domains []Domain
+    domainMap := make(map[string]Domain)
     scanner := bufio.NewScanner(file)
     lineCount := 0
     validCount := 0
@@ -60,16 +60,30 @@ func processDomainFile(inputPath string) []Domain {
             continue
         }
 
-        domains = append(domains, domain)
-        validCount++
-        fmt.Printf("有效域名: %s://%s%s\n", domain.Protocol, domain.Host, domain.Port)
+        // 创建一个唯一的键，忽略协议和默认端口
+        key := domain.Host
+        if domain.Port != "" {
+            key += ":" + domain.Port
+        }
+
+        if _, exists := domainMap[key]; !exists {
+            domainMap[key] = domain
+            validCount++
+            fmt.Printf("有效域名: %s://%s%s\n", domain.Protocol, domain.Host, domain.Port)
+        }
     }
 
     if err := scanner.Err(); err != nil {
         fmt.Printf("读取文件时发生错误: %v\n", err)
     }
 
-    fmt.Printf("总行数: %d, 有效域名数: %d\n", lineCount, validCount)
+    // 将 map 转换为 slice
+    domains := make([]Domain, 0, len(domainMap))
+    for _, domain := range domainMap {
+        domains = append(domains, domain)
+    }
+
+    fmt.Printf("总行数: %d, 唯一有效域名数: %d\n", lineCount, validCount)
     return domains
 }
 
@@ -83,17 +97,13 @@ func parseDomain(line string) (Domain, bool) {
     domain := Domain{
         Protocol: u.Scheme,
         Host:     u.Hostname(),
-        Port:     u.Port(),
     }
 
-    if domain.Port == "" {
-        if domain.Protocol == "http" {
-            domain.Port = ":80"
-        } else {
-            domain.Port = ":443"
+    // 只有非默认端口时才设置 Port
+    if u.Port() != "" {
+        if (u.Scheme == "http" && u.Port() != "80") || (u.Scheme == "https" && u.Port() != "443") {
+            domain.Port = u.Port()
         }
-    } else {
-        domain.Port = ":" + domain.Port
     }
 
     return domain, true
