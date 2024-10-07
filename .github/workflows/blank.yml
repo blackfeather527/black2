@@ -5,6 +5,10 @@ on:
     - cron: '10 16 * * *'  # 每天东八区凌晨00:10运行
   workflow_dispatch:  # 允许手动触发
 
+env:
+  USE_TEST_DATA: ${{ secrets.USE_TEST_DATA }}  # 控制是否使用测试数据
+  FOFA_PROGRAM_SUFFIX: 'hack'  # Fofa程序名称的后缀，可以根据需要修改
+
 jobs:
   fetch-and-process:
     runs-on: ubuntu-latest
@@ -22,28 +26,80 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y curl wget
+
     - name: Initialize Go module and get dependencies
       run: |
         go mod init github.com/${{ github.repository }}
         go get golang.org/x/time/rate
-    - name: Download Fofa-list
-      run: |
-        DOWNLOAD_URL=$(curl -s https://api.github.com/repos/Cl0udG0d/Fofa-hack/releases/latest | grep "browser_download_url.*fofa-hack_linux_amd64" | cut -d '"' -f 4)
-        wget -O fofa $DOWNLOAD_URL
-        chmod +x fofa
 
-    - name: Run Fofa-list
+    - name: Download and Run Fofa-list
+      if: env.USE_TEST_DATA != 'true'
+      run: |
+        # 从GitHub最新release下载Fofa工具
+        DOWNLOAD_URL=$(curl -s https://api.github.com/repos/Cl0udG0d/Fofa-${{ env.FOFA_PROGRAM_SUFFIX }}/releases/latest | grep "browser_download_url.*fofa-${{ env.FOFA_PROGRAM_SUFFIX }}_linux_amd64" | cut -d '"' -f 4)
+        if [ -z "$DOWNLOAD_URL" ]; then
+          echo "错误：无法获取fofa-${{ env.FOFA_PROGRAM_SUFFIX }}下载链接"
+          exit 1
+        fi
+        wget -O Fofa-${{ env.FOFA_PROGRAM_SUFFIX }} $DOWNLOAD_URL
+        if [ $? -ne 0 ]; then
+          echo "错误：下载Fofa-${{ env.FOFA_PROGRAM_SUFFIX }}失败"
+          exit 1
+        fi
+        chmod +x Fofa-${{ env.FOFA_PROGRAM_SUFFIX }}
+        if [ ! -x "Fofa-${{ env.FOFA_PROGRAM_SUFFIX }}" ]; then
+          echo "错误：无法设置Fofa-${{ env.FOFA_PROGRAM_SUFFIX }}为可执行文件"
+          exit 1
+        fi
+        echo "Fofa-${{ env.FOFA_PROGRAM_SUFFIX }}工具下载成功"
+
+        # 创建输出目录并运行Fofa
+        mkdir -p /tmp/fofa_output
+        ./Fofa-${{ env.FOFA_PROGRAM_SUFFIX }} -k 'body="Sansui233"' -e 500 -on /tmp/fofa_output/domains
+
+        # 更新仓库中的域名列表
+        cp /tmp/fofa_output/domains.txt ./data/domains.txt
+
+    - name: Use existing data
+      if: env.USE_TEST_DATA == 'true'
       run: |
         mkdir -p /tmp/fofa_output
-        ./fofa -k 'body="Sansui233"' -e 500 -on /tmp/fofa_output/domains
-   
+        cp ./data/domains.txt /tmp/fofa_output/domains.txt
+
+    - name: Validate and clean domains file
+      run: |
+        # 检查domains.txt文件是否存在
+        if [ ! -f "/tmp/fofa_output/domains.txt" ]; then
+          echo "错误：domains.txt 文件不存在"
+          exit 1
+        fi
+
+        # 检查文件是否为空
+        if [ ! -s "/tmp/fofa_output/domains.txt" ]; then
+          echo "错误：domains.txt 文件为空"
+          exit 1
+        fi
+
+        # 清理不正确的域名
+        sed -i.bak -E '/^(https?:\/\/)?([a-zA-Z0-9.-]+)(:[0-9]+)?$/!d' /tmp/fofa_output/domains.txt
+
+        # 检查清理后的文件是否为空
+        if [ ! -s "/tmp/fofa_output/domains.txt" ]; then
+          echo "错误：清理后的 domains.txt 文件为空"
+          exit 1
+        fi
+
+        echo "domains.txt 文件验证和清理完成"
+
     - name: Count and display domains
       run: |
+        # 统计并显示找到的域名数量
         DOMAIN_COUNT=$(wc -l < /tmp/fofa_output/domains.txt)
-        echo "Total number of domains found: $DOMAIN_COUNT"
+        echo "找到的有效域名总数：$DOMAIN_COUNT"
 
     - name: Process domains
       run: |
+        # 创建输出目录并运行Go程序处理域名
         mkdir -p output
         go run process_domains.go -input /tmp/fofa_output/domains.txt -output ./output
       env:
@@ -51,17 +107,12 @@ jobs:
 
     - name: Commit and push changes
       run: |
+        # 配置Git并提交更改
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
         git add output/vmess_list.txt output/trojan_list.txt
-        git commit -m "Update proxy lists" || echo "No changes to commit"
+        if [ "${{ env.USE_TEST_DATA }}" != "true" ]; then
+          git add ./data/domains.txt
+        fi
+        git commit -m "更新代理列表" || echo "没有需要提交的更改"
         git push
-
-    - name: Upload logs
-      uses: actions/upload-artifact@v4
-      with:
-        name: execution-logs
-        path: |
-          /tmp/fofa_output/domains.txt
-          ./output/vmess_list.txt
-          ./output/trojan_list.txt
