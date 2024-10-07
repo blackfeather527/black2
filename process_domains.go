@@ -2,6 +2,7 @@ package main
 
 import (
     "bufio"
+    "context"
     "crypto/tls"
     "encoding/base64"
     "fmt"
@@ -143,7 +144,7 @@ func removeDuplicates(list []string) []string {
 
 func getSubContent(domain, path string) string {
     client := &http.Client{
-        Timeout: 10 * time.Second,
+        Timeout: timeout,
         Transport: &http.Transport{
             TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
         },
