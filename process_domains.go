@@ -11,7 +11,16 @@ import (
     "strings"
     "sync"
     "time"
+    "golang.org/x/time/rate"
 )
+
+const (
+    maxConcurrent = 10
+    maxRetries    = 3
+    timeout       = 30 * time.Second
+)
+
+var limiter = rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
 
 func main() {
     fmt.Println("Starting domain processing...")
@@ -28,15 +37,22 @@ func main() {
     scanner := bufio.NewScanner(inputFile)
     var validDomains []string
     var wg sync.WaitGroup
+    semaphore := make(chan struct{}, maxConcurrent)
 
     domainCount := 0
     for scanner.Scan() {
         domain := scanner.Text()
-        fmt.Printf("Read domain: %s\n", domain) 
+        fmt.Printf("Read domain: %s\n", domain)
         domainCount++
         wg.Add(1)
         go func(d string) {
             defer wg.Done()
+            semaphore <- struct{}{}
+            defer func() { <-semaphore }()
+            if err := limiter.Wait(context.Background()); err != nil {
+                fmt.Printf("Rate limit error: %v\n", err)
+                return
+            }
             if checkDomain(d) {
                 validDomains = append(validDomains, d)
                 fmt.Printf("Valid domain found: %s\n", d)
@@ -87,25 +103,28 @@ func main() {
 
 func checkDomain(domain string) bool {
     client := &http.Client{
-        Timeout: 10 * time.Second,
+        Timeout: timeout,
         Transport: &http.Transport{
             TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
         },
     }
 
-    resp, err := client.Get(domain)
-    if err != nil {
-        fmt.Printf("Error checking %s: %v\n", domain, err)
-        return false
-    }
-    defer resp.Body.Close()
+    for i := 0; i < maxRetries; i++ {
+        resp, err := client.Get(domain)
+        if err != nil {
+            fmt.Printf("Error checking %s (attempt %d): %v\n", domain, i+1, err)
+            time.Sleep(time.Second * time.Duration(i+1))
+            continue
+        }
+        defer resp.Body.Close()
 
-    body, _ := ioutil.ReadAll(resp.Body)
-    if strings.Contains(string(body), "Sansui233") {
-        fmt.Printf("Domain %s is valid\n", domain)
-        return true
+        body, _ := ioutil.ReadAll(resp.Body)
+        if strings.Contains(string(body), "Sansui233") {
+            fmt.Printf("Domain %s is valid\n", domain)
+            return true
+        }
+        break
     }
-
     fmt.Printf("Domain %s is invalid\n", domain)
     return false
 }
