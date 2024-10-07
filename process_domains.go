@@ -9,10 +9,10 @@ import (
     "strings"
 )
 
-// DomainInfo 结构体用于存储域名信息
-type DomainInfo struct {
+// Domain 结构体用于存储解析后的域名信息
+type Domain struct {
     Protocol string
-    Domain   string
+    Host     string
     Port     string
 }
 
@@ -22,77 +22,79 @@ func main() {
     outputDir := flag.String("output", ".", "输出文件目录")
     flag.Parse()
 
-    // 读取和解析输入文件
-    domains, err := readAndParseDomains(*inputPath)
-    if err != nil {
-        fmt.Printf("读取和解析域名时出错: %v\n", err)
-        return
-    }
+    // 打印命令行参数以防止未使用警告
+    fmt.Printf("输入文件路径: %s\n", *inputPath)
+    fmt.Printf("输出文件目录: %s\n", *outputDir)
 
-    // 这里可以继续处理 domains 列表
-    // ...
+    // 调用函数处理输入文件
+    domains := processDomainFile(*inputPath)
 
-    fmt.Printf("成功解析的域名总数: %d\n", len(domains))
+    // 在这里可以继续处理 domains 列表
+    fmt.Printf("总共处理了 %d 个有效域名\n", len(domains))
 }
 
-// readAndParseDomains 读取输入文件并解析域名
-func readAndParseDomains(inputPath string) ([]DomainInfo, error) {
+// processDomainFile 函数用于处理输入文件并返回有效的域名列表
+func processDomainFile(inputPath string) []Domain {
     file, err := os.Open(inputPath)
     if err != nil {
-        return nil, fmt.Errorf("打开输入文件时出错: %w", err)
+        fmt.Printf("打开文件失败: %v\n", err)
+        return nil
     }
     defer file.Close()
 
-    var domains []DomainInfo
+    var domains []Domain
     scanner := bufio.NewScanner(file)
-    lineNumber := 0
+    lineCount := 0
+    validCount := 0
 
     for scanner.Scan() {
-        lineNumber++
+        lineCount++
         line := strings.TrimSpace(scanner.Text())
-
         if line == "" {
-            continue // 跳过空行
-        }
-
-        domainInfo, err := parseDomainLine(line)
-        if err != nil {
-            fmt.Printf("行 %d: 解析错误 - %v\n", lineNumber, err)
             continue
         }
 
-        domains = append(domains, domainInfo)
-        fmt.Printf("有效域名: %s://%s%s\n", domainInfo.Protocol, domainInfo.Domain, domainInfo.Port)
+        domain, ok := parseDomain(line)
+        if !ok {
+            fmt.Printf("第 %d 行格式不正确: %s\n", lineCount, line)
+            continue
+        }
+
+        domains = append(domains, domain)
+        validCount++
+        fmt.Printf("有效域名: %s://%s%s\n", domain.Protocol, domain.Host, domain.Port)
     }
 
     if err := scanner.Err(); err != nil {
-        return nil, fmt.Errorf("读取文件时出错: %w", err)
+        fmt.Printf("读取文件时发生错误: %v\n", err)
     }
 
-    fmt.Printf("成功解析的域名总数: %d\n", len(domains))
-    return domains, nil
+    fmt.Printf("总行数: %d, 有效域名数: %d\n", lineCount, validCount)
+    return domains
 }
 
-// parseDomainLine 解析单行域名信息
-func parseDomainLine(line string) (DomainInfo, error) {
+// parseDomain 函数用于解析单个域名行
+func parseDomain(line string) (Domain, bool) {
     u, err := url.Parse(line)
-    if err != nil {
-        return DomainInfo{}, fmt.Errorf("无效的URL格式: %v", err)
+    if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+        return Domain{}, false
     }
 
-    if u.Scheme != "http" && u.Scheme != "https" {
-        return DomainInfo{}, fmt.Errorf("无效的协议: %s", u.Scheme)
-    }
-
-    domainInfo := DomainInfo{
+    domain := Domain{
         Protocol: u.Scheme,
-        Domain:   u.Hostname(),
+        Host:     u.Hostname(),
         Port:     u.Port(),
     }
 
-    if domainInfo.Port != "" {
-        domainInfo.Port = ":" + domainInfo.Port
+    if domain.Port == "" {
+        if domain.Protocol == "http" {
+            domain.Port = ":80"
+        } else {
+            domain.Port = ":443"
+        }
+    } else {
+        domain.Port = ":" + domain.Port
     }
 
-    return domainInfo, nil
+    return domain, true
 }
