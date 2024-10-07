@@ -25,12 +25,23 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y curl wget
+        sudo apt-get install -y curl wget sqlite3
 
     - name: Initialize Go module and get dependencies
       run: |
         go mod init github.com/${{ github.repository }}
         go get golang.org/x/time/rate
+        go get github.com/mattn/go-sqlite3
+
+    - name: Restore SQLite database
+      run: |
+        if [ -f "./domains.db" ]; then
+          cp ./domains.db /tmp/domains.db
+          echo "已从仓库根目录恢复数据库"
+        else
+          echo "数据库文件不存在，将创建新的数据库"
+          touch /tmp/domains.db
+        fi
 
     - name: Download and Run Fofa-list
       if: env.USE_TEST_DATA != 'true'
@@ -101,18 +112,23 @@ jobs:
       run: |
         # 创建输出目录并运行Go程序处理域名
         mkdir -p output
-        go run process_domains.go -input /tmp/fofa_output/domains.txt -output ./output
+        go run process_domains.go -input /tmp/fofa_output/domains.txt -output ./output -db /tmp/domains.db
       env:
         ACTIONS_STEP_DEBUG: true
+
+    - name: Backup SQLite database
+      run: |
+        cp /tmp/domains.db ./domains.db
+        echo "已备份数据库到仓库根目录"
 
     - name: Commit and push changes
       run: |
         # 配置Git并提交更改
         git config --local user.email "action@github.com"
         git config --local user.name "GitHub Action"
-        git add output/vmess_list.txt output/trojan_list.txt
+        git add output/vmess_list.txt output/trojan_list.txt domains.db
         if [ "${{ env.USE_TEST_DATA }}" != "true" ]; then
           git add ./data/domains.txt
         fi
-        git commit -m "更新代理列表" || echo "没有需要提交的更改"
+        git commit -m "更新代理列表和数据库" || echo "没有需要提交的更改"
         git push
