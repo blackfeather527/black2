@@ -14,6 +14,7 @@ import (
     "strings"
     "sync"
     "time"
+    "unicode/utf8"
     "golang.org/x/time/rate"
 )
 
@@ -123,8 +124,26 @@ func checkDomain(domain string) bool {
         }
         defer resp.Body.Close()
 
-        body, _ := ioutil.ReadAll(resp.Body)
-        if strings.Contains(string(body), "Sansui233") {
+        body, err := ioutil.ReadAll(resp.Body)
+        if err != nil {
+            fmt.Printf("Error reading body from %s: %v\n", domain, err)
+            continue
+        }
+
+        // 将 body 转换为 UTF-8 编码
+        bodyUTF8 := make([]rune, 0, len(body))
+        for len(body) > 0 {
+            r, size := utf8.DecodeRune(body)
+            if r == utf8.RuneError {
+                body = body[1:]
+            } else {
+                bodyUTF8 = append(bodyUTF8, r)
+                body = body[size:]
+            }
+        }
+        bodyString := string(bodyUTF8)
+
+        if strings.Contains(bodyString, "Sansui233") && strings.Contains(bodyString, "目前共有抓取源") {
             return true
         }
         break
