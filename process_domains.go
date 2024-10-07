@@ -171,7 +171,7 @@ func checkDomains(domains []Domain) []Domain {
                 return
             }
 
-            shouldCheck, failureCount := shouldCheckDomain(db, d)
+            shouldCheck, _ := shouldCheckDomain(db, d)
             if !shouldCheck {
                 return
             }
