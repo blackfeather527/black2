@@ -20,7 +20,7 @@ import (
 const (
     maxConcurrent = 10
     maxRetries    = 3
-    timeout       = 30 * time.Second
+    timeout       = 5 * time.Second
 )
 
 var limiter = rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
@@ -119,7 +119,6 @@ func checkDomain(domain string) bool {
     for i := 0; i < maxRetries; i++ {
         resp, err := client.Get(domain)
         if err != nil {
-            fmt.Printf("Error checking %s (attempt %d): %v\n", domain, i+1, err)
             time.Sleep(time.Second * time.Duration(i+1))
             continue
         }
