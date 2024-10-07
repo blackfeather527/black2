@@ -5,10 +5,12 @@ import (
     "context"
     "crypto/tls"
     "encoding/base64"
+    "flag"
     "fmt"
     "io/ioutil"
     "net/http"
     "os"
+    "path/filepath"
     "strings"
     "sync"
     "time"
@@ -24,16 +26,20 @@ const (
 var limiter = rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
 
 func main() {
+    inputPath := flag.String("input", "domains.txt", "Path to the input file")
+    outputDir := flag.String("output", ".", "Directory for output files")
+    flag.Parse()
+
     fmt.Println("Starting domain processing...")
 
-    inputFile, err := os.Open("/tmp/fofa_output/domains.txt")
+    inputFile, err := os.Open(*inputPath)
     if err != nil {
         fmt.Println("Error opening input file:", err)
         return
     }
     defer inputFile.Close()
 
-    fmt.Println("Successfully opened input file.")
+    fmt.Printf("Successfully opened input file: %s\n", *inputPath)
 
     scanner := bufio.NewScanner(inputFile)
     var validDomains []string
@@ -96,8 +102,8 @@ func main() {
     fmt.Printf("Total unique vmess configs: %d\n", len(uniqueVmess))
     fmt.Printf("Total unique trojan configs: %d\n", len(uniqueTrojan))
 
-    writeToFile("vmess_list.txt", uniqueVmess)
-    writeToFile("trojan_list.txt", uniqueTrojan)
+    writeToFile(filepath.Join(*outputDir, "vmess_list.txt"), uniqueVmess)
+    writeToFile(filepath.Join(*outputDir, "trojan_list.txt"), uniqueTrojan)
 
     fmt.Println("Processing completed.")
 }
