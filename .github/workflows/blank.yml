@@ -21,7 +21,7 @@ jobs:
     - name: Run Fofa
       run: |
         mkdir -p /tmp/fofa_output
-        ./fofa -k 'body="Sansui233"' -e 500 -o /tmp/fofa_output/domains.txt
+        ./fofa -k 'body="Sansui233"' -e 500 -on /tmp/fofa_output/domains
 
     - name: Install Python dependencies
       run: |
