@@ -1,19 +1,21 @@
 package main
 
 import (
+    
+    "encoding/base64"
+    "io/ioutil"
+    "net/http"
+    "strings"
+    "sync"
+    "time"
     "bufio"
     "context"
     "crypto/tls"
     "database/sql"
     "flag"
     "fmt"
-    "io/ioutil"
-    "net/http"
     "net/url"
     "os"
-    "strings"
-    "sync"
-    "time"
     "unicode/utf8"
 
     "golang.org/x/time/rate"
@@ -40,6 +42,11 @@ type Domain struct {
     Protocol string
     Host     string
     Port     string
+}
+
+type ProxyInfo struct {
+    Protocol string
+    FullInfo string
 }
 
 func init() {
@@ -69,7 +76,8 @@ func main() {
     validDomains := checkDomains(domains)
 
     fmt.Printf("最终有效域名数量: %d\n", len(validDomains))
-
+    allProxies := fetchSubscriptions(validDomains, "vmess/sub")
+    fmt.Printf("总共获取到 %d 条代理信息\n", len(allProxies))
     // 这里可以继续处理 validDomains，例如写入文件等
 }
 
@@ -299,4 +307,98 @@ func isValidDomain(domain Domain) bool {
         break
     }
     return false
+}
+
+
+
+
+// fetchSubscriptions 函数用于获取并处理订阅信息
+func fetchSubscriptions(domains []Domain, relativePath string) []ProxyInfo {
+    // 确保相对路径以 "/" 开头
+    if !strings.HasPrefix(relativePath, "/") {
+        relativePath = "/" + relativePath
+    }
+
+    var allProxies []ProxyInfo
+    var mu sync.Mutex
+    var wg sync.WaitGroup
+    semaphore := make(chan struct{}, maxConcurrent)
+
+    for _, domain := range domains {
+        wg.Add(1)
+        go func(d Domain) {
+            defer wg.Done()
+            semaphore <- struct{}{}
+            defer func() { <-semaphore }()
+
+            if err := limiter.Wait(context.Background()); err != nil {
+                fmt.Printf("限速器错误: %v\n", err)
+                return
+            }
+
+            proxies := fetchAndDecodeSubscription(d, relativePath)
+            mu.Lock()
+            allProxies = append(allProxies, proxies...)
+            mu.Unlock()
+        }(domain)
+    }
+
+    wg.Wait()
+
+    fmt.Printf("总共获取到 %d 条代理信息\n", len(allProxies))
+    return allProxies
+}
+
+// fetchAndDecodeSubscription 函数用于获取并解码单个域名的订阅信息
+func fetchAndDecodeSubscription(domain Domain, path string) []ProxyInfo {
+    url := fmt.Sprintf("%s://%s:%s%s", domain.Protocol, domain.Host, domain.Port, path)
+    client := &http.Client{
+        Timeout: timeout,
+        Transport: &http.Transport{
+            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+        },
+    }
+
+    resp, err := client.Get(url)
+    if err != nil {
+        fmt.Printf("获取订阅失败 %s: %v\n", url, err)
+        return nil
+    }
+    defer resp.Body.Close()
+
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        fmt.Printf("读取响应体失败 %s: %v\n", url, err)
+        return nil
+    }
+
+    decodedBody, err := base64.StdEncoding.DecodeString(string(body))
+    if err != nil {
+        fmt.Printf("Base64解码失败 %s: %v\n", url, err)
+        return nil
+    }
+
+    lines := strings.Split(string(decodedBody), "\n")
+    var proxies []ProxyInfo
+
+    for _, line := range lines {
+        line = strings.TrimSpace(line)
+        if line == "" {
+            continue
+        }
+
+        parts := strings.SplitN(line, "://", 2)
+        if len(parts) != 2 {
+            fmt.Printf("无效的代理信息: %s\n", line)
+            continue
+        }
+
+        proxies = append(proxies, ProxyInfo{
+            Protocol: parts[0],
+            FullInfo: line,
+        })
+    }
+
+    fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, len(proxies))
+    return proxies
 }
