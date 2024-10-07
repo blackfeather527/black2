@@ -41,7 +41,8 @@ jobs:
 
     - name: Process domains
       run: go run process_domains.go
-
+      env:
+        ACTIONS_STEP_DEBUG: true
     - name: Commit and push changes
       run: |
         git config --local user.email "action@github.com"
