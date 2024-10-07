@@ -33,7 +33,17 @@ jobs:
       run: |
         mkdir -p /tmp/fofa_output
         ./fofa -k 'body="Sansui233"' -e 500 -on /tmp/fofa_output/domains
-
+    - name: Find and display domains.txt location
+      run: |
+        echo "Searching for domains.txt file..."
+        DOMAINS_FILE=$(find / -name domains.txt 2>/dev/null)
+        if [ -n "$DOMAINS_FILE" ]; then
+          echo "domains.txt found at: $DOMAINS_FILE"
+          echo "File contents:"
+          cat "$DOMAINS_FILE"
+        else
+          echo "domains.txt not found"
+        fi
     - name: Process domains
       run: go run process_domains.go
 
