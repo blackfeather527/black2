@@ -1,72 +1,46 @@
-name: Fofa Domain Checker
+name: Fetch and Process Proxy Lists
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # 每天运行一次
+    - cron: '10 16 * * *'  # 每天东八区凌晨00:10运行
   workflow_dispatch:  # 允许手动触发
 
 jobs:
-  check-domains:
+  fetch-and-process:
     runs-on: ubuntu-latest
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v2
 
-    - name: Download latest Fofa-hack release
+    - name: Set up Go
+      uses: actions/setup-go@v2
+      with:
+        go-version: '1.17'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y curl wget
+
+    - name: Download Fofa-list
       run: |
         DOWNLOAD_URL=$(curl -s https://api.github.com/repos/Cl0udG0d/Fofa-hack/releases/latest | grep "browser_download_url.*fofa-hack_linux_amd64" | cut -d '"' -f 4)
-        curl -L -o fofa $DOWNLOAD_URL
+        wget -O fofa $DOWNLOAD_URL
         chmod +x fofa
 
-    - name: Run Fofa
+    - name: Run Fofa-list
       run: |
         mkdir -p /tmp/fofa_output
-        ./fofa -k 'body="Sansui233"' -e 500 -on /tmp/fofa_output/domains
+        ./fofa -k 'body="Sansui233"' -e 500 -o /tmp/fofa_output/domains
 
-    - name: Install Python dependencies
+    - name: Process domains
+      run: go run process_domains.go
+
+    - name: Commit and push changes
       run: |
-        python -m pip install --upgrade pip
-        pip install requests
-
-    - name: Check domains
-      run: |
-        python - <<EOF
-        import requests
-        import concurrent.futures
-        from urllib3.exceptions import InsecureRequestWarning
-
-        # 禁用不安全请求警告
-        requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
-
-        def check_domain(domain):
-            if not domain.startswith(('http://', 'https://')):
-                domain = f"https://{domain}"
-            try:
-                response = requests.get(domain, timeout=10, verify=False)
-                if "Sansui233" in response.text:
-                    return domain
-            except:
-                pass
-            return None
-
-        with open('/tmp/fofa_output/domains.txt', 'r') as f:
-            domains = [line.strip() for line in f]
-
-        valid_domains = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=20) as executor:
-            future_to_domain = {executor.submit(check_domain, domain): domain for domain in domains}
-            for future in concurrent.futures.as_completed(future_to_domain):
-                result = future.result()
-                if result:
-                    valid_domains.append(result)
-
-        with open('valid_domains.txt', 'w') as f:
-            for domain in valid_domains:
-                f.write(f"{domain}\n")
-        EOF
-
-    - name: Upload valid domains
-      uses: actions/upload-artifact@v4
-      with:
-        name: valid-domains
-        path: valid_domains.txt
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        git add vmess_list.txt trojan_list.txt
+        git commit -m "Update proxy lists" || echo "No changes to commit"
+        git push
