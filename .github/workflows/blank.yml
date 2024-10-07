@@ -32,7 +32,7 @@ jobs:
     - name: Run Fofa-list
       run: |
         mkdir -p /tmp/fofa_output
-        ./fofa -k 'body="Sansui233"' -e 500 -on /tmp/fofa_output/domains
+        ./fofa -k 'body="Sansui233"' -e 500 -on domains
     - name: Find and display domains.txt location
       run: |
         echo "Searching for domains.txt file..."
