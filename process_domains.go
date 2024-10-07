@@ -319,7 +319,7 @@ func fetchSubscriptions(domains []Domain, relativePath string) []ProxyInfo {
         relativePath = "/" + relativePath
     }
 
-    var allProxies []ProxyInfo
+    uniqueProxies := make(map[string]ProxyInfo)
     var mu sync.Mutex
     var wg sync.WaitGroup
     semaphore := make(chan struct{}, maxConcurrent)
@@ -338,14 +338,22 @@ func fetchSubscriptions(domains []Domain, relativePath string) []ProxyInfo {
 
             proxies := fetchAndDecodeSubscription(d, relativePath)
             mu.Lock()
-            allProxies = append(allProxies, proxies...)
+            for _, proxy := range proxies {
+                uniqueProxies[proxy.FullInfo] = proxy
+            }
             mu.Unlock()
         }(domain)
     }
 
     wg.Wait()
 
-    fmt.Printf("总共获取到 %d 条代理信息\n", len(allProxies))
+    // 将 map 转换为切片
+    allProxies := make([]ProxyInfo, 0, len(uniqueProxies))
+    for _, proxy := range uniqueProxies {
+        allProxies = append(allProxies, proxy)
+    }
+
+    fmt.Printf("总共获取到 %d 条唯一代理信息\n", len(allProxies))
     return allProxies
 }
 
