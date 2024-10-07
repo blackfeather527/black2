@@ -4,6 +4,7 @@ import (
     "bufio"
     "context"
     "crypto/tls"
+    "database/sql"
     "flag"
     "fmt"
     "io/ioutil"
@@ -16,45 +17,62 @@ import (
     "unicode/utf8"
 
     "golang.org/x/time/rate"
+    _ "github.com/mattn/go-sqlite3"
 )
+
 const (
     maxConcurrent = 10
     maxRetries    = 3
     timeout       = 5 * time.Second
 )
 
+var (
+    inputPath        *string
+    outputDir        *string
+    failureThreshold *int
+    silentDays       *int
+    dbPath           *string
+)
+
 var limiter = rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
 
-// Domain 结构体用于存储解析后的域名信息
 type Domain struct {
     Protocol string
     Host     string
     Port     string
 }
 
-func main() {
+func init() {
     // 定义命令行参数
-    inputPath := flag.String("input", "domains.txt", "输入文件路径")
-    outputDir := flag.String("output", ".", "输出文件目录")
+    inputPath = flag.String("input", "domains.txt", "输入文件路径")
+    outputDir = flag.String("output", ".", "输出文件目录")
+    failureThreshold = flag.Int("failures", 5, "检测失败次数阈值")
+    silentDays = flag.Int("silent", 7, "检测静默天数")
+    dbPath = flag.String("db", "domains.db", "SQLite 数据库路径")
+}
+
+func main() {
+    // 解析命令行参数
     flag.Parse()
 
     // 打印命令行参数以防止未使用警告
     fmt.Printf("输入文件路径: %s\n", *inputPath)
     fmt.Printf("输出文件目录: %s\n", *outputDir)
-    
+    fmt.Printf("检测失败次数阈值: %d\n", *failureThreshold)
+    fmt.Printf("检测静默天数: %d\n", *silentDays)
+    fmt.Printf("SQLite 数据库路径: %s\n", *dbPath)
+
     // 调用函数处理输入文件
     domains := processDomainFile(*inputPath)
-    fmt.Printf("总共处理了 %d 个唯一有效域名\n", len(domains))
+
     // 检查域名的有效性
     validDomains := checkDomains(domains)
 
     fmt.Printf("最终有效域名数量: %d\n", len(validDomains))
 
-    // 在这里可以继续处理 domains 列表
-
+    // 这里可以继续处理 validDomains，例如写入文件等
 }
 
-// processDomainFile 函数用于处理输入文件并返回唯一有效的域名列表
 func processDomainFile(inputPath string) []Domain {
     file, err := os.Open(inputPath)
     if err != nil {
@@ -106,7 +124,6 @@ func processDomainFile(inputPath string) []Domain {
     return domains
 }
 
-// parseDomain 函数用于解析单个域名行
 func parseDomain(line string) (Domain, bool) {
     u, err := url.Parse(line)
     if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
@@ -130,8 +147,14 @@ func parseDomain(line string) (Domain, bool) {
     return domain, true
 }
 
-// checkDomains 函数用于检查整个域名切片
 func checkDomains(domains []Domain) []Domain {
+    db, err := initDB()
+    if err != nil {
+        fmt.Printf("初始化数据库失败: %v\n", err)
+        return nil
+    }
+    defer db.Close()
+
     var validDomains []Domain
     var wg sync.WaitGroup
     var mu sync.Mutex
@@ -149,11 +172,20 @@ func checkDomains(domains []Domain) []Domain {
                 return
             }
 
+            shouldCheck, failureCount := shouldCheckDomain(db, d)
+            if !shouldCheck {
+                fmt.Printf("跳过域名 %s://%s:%s (失败次数: %d)\n", d.Protocol, d.Host, d.Port, failureCount)
+                return
+            }
+
             if isValidDomain(d) {
                 mu.Lock()
                 validDomains = append(validDomains, d)
                 mu.Unlock()
                 fmt.Printf("有效域名: %s://%s:%s\n", d.Protocol, d.Host, d.Port)
+                updateDomainStatus(db, d, true)
+            } else {
+                updateDomainStatus(db, d, false)
             }
         }(domain)
     }
@@ -164,7 +196,68 @@ func checkDomains(domains []Domain) []Domain {
     return validDomains
 }
 
-// isValidDomain 函数用于检查单个域名是否有效
+func initDB() (*sql.DB, error) {
+    db, err := sql.Open("sqlite3", *dbPath)
+    if err != nil {
+        return nil, err
+    }
+
+    _, err = db.Exec(`
+        CREATE TABLE IF NOT EXISTS domain_checks (
+            domain TEXT PRIMARY KEY,
+            failure_count INT,
+            last_check DATETIME
+        )
+    `)
+    if err != nil {
+        return nil, err
+    }
+
+    return db, nil
+}
+
+func shouldCheckDomain(db *sql.DB, domain Domain) (bool, int) {
+    var failureCount int
+    var lastCheck time.Time
+    err := db.QueryRow("SELECT failure_count, last_check FROM domain_checks WHERE domain = ?", 
+                       fmt.Sprintf("%s://%s:%s", domain.Protocol, domain.Host, domain.Port)).
+           Scan(&failureCount, &lastCheck)
+
+    if err == sql.ErrNoRows {
+        return true, 0
+    } else if err != nil {
+        fmt.Printf("查询域名状态失败: %v\n", err)
+        return true, 0
+    }
+
+    if failureCount >= *failureThreshold && time.Since(lastCheck) < time.Duration(*silentDays)*24*time.Hour {
+        return false, failureCount
+    }
+
+    return true, failureCount
+}
+
+func updateDomainStatus(db *sql.DB, domain Domain, isValid bool) {
+    domainStr := fmt.Sprintf("%s://%s:%s", domain.Protocol, domain.Host, domain.Port)
+    if isValid {
+        _, err := db.Exec("DELETE FROM domain_checks WHERE domain = ?", domainStr)
+        if err != nil {
+            fmt.Printf("删除有效域名记录失败: %v\n", err)
+        }
+    } else {
+        _, err := db.Exec(`
+            INSERT INTO domain_checks (domain, failure_count, last_check)
+            VALUES (?, 1, CURRENT_TIMESTAMP)
+            ON CONFLICT(domain) DO UPDATE SET
+            failure_count = failure_count + 1,
+            last_check = CURRENT_TIMESTAMP
+        `, domainStr)
+        if err != nil {
+            fmt.Printf("更新域名状态失败: %v\n", err)
+        }
+    }
+}
+
 func isValidDomain(domain Domain) bool {
     url := fmt.Sprintf("%s://%s:%s", domain.Protocol, domain.Host, domain.Port)
     client := &http.Client{
