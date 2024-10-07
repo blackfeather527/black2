@@ -1,17 +1,22 @@
 package main
 
 import (
+    "bufio"
+    "context"
     "crypto/tls"
+    "flag"
     "fmt"
     "io/ioutil"
     "net/http"
+    "net/url"
+    "os"
     "strings"
     "sync"
     "time"
     "unicode/utf8"
+
     "golang.org/x/time/rate"
 )
-
 const (
     maxConcurrent = 10
     maxRetries    = 3
