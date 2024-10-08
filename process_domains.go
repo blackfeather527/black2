@@ -51,17 +51,6 @@ func main() {
 	log.Println("程序执行完毕")
 }
 
-package main
-
-import (
-	"bufio"
-	"log"
-	"net/url"
-	"os"
-	"strings"
-	"sync"
-)
-
 func readDomains(inputFile string) *sync.Map {
 	domains := &sync.Map{}
 	uniqueDomains := make(map[string]struct{})
