@@ -14,6 +14,7 @@ import (
     "time"
 
     "golang.org/x/text/encoding/simplifiedchinese"
+    "golang.org/x/text/transform"
 )
 
 func main() {
@@ -128,7 +129,19 @@ func checkDomains(domains *sync.Map) *sync.Map {
     validDomains := &sync.Map{}
     var totalCount, headCount, validCount int64
     var wg sync.WaitGroup
-    semaphore := make(chan struct{}, 10) // 限制并发数为10
+    semaphore := make(chan struct{}, 50) // 增加并发数到 50
+
+    // 进度报告
+    ticker := time.NewTicker(5 * time.Second)
+    defer ticker.Stop()
+    go func() {
+        for range ticker.C {
+            log.Printf("进度: 总数 %d, HEAD 成功 %d, 有效 %d", 
+                       atomic.LoadInt64(&totalCount), 
+                       atomic.LoadInt64(&headCount), 
+                       atomic.LoadInt64(&validCount))
+        }
+    }()
 
     domains.Range(func(key, value interface{}) bool {
         wg.Add(1)
@@ -139,7 +152,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
 
             atomic.AddInt64(&totalCount, 1)
             client := &http.Client{
-                Timeout: 10 * time.Second,
+                Timeout: 5 * time.Second, // 减少超时时间
                 CheckRedirect: func(req *http.Request, via []*http.Request) error {
                     return http.ErrUseLastResponse
                 },
@@ -161,25 +174,52 @@ func checkDomains(domains *sync.Map) *sync.Map {
             }
             defer resp.Body.Close()
 
-            // 读取响应体
-            body, err := ioutil.ReadAll(resp.Body)
-            if err != nil {
-                return
+            // 检查编码
+            contentType := resp.Header.Get("Content-Type")
+            var reader *bufio.Reader
+            if strings.Contains(contentType, "gbk") || strings.Contains(contentType, "gb2312") {
+                reader = bufio.NewReader(transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder()))
+            } else {
+                reader = bufio.NewReader(resp.Body)
             }
 
-            // 处理可能的中文编码
-            contentType := resp.Header.Get("Content-Type")
-            if strings.Contains(contentType, "gbk") || strings.Contains(contentType, "gb2312") {
-                body, err = simplifiedchinese.GBK.NewDecoder().Bytes(body)
+            // 使用 strings.Builder 来构建低内存消耗的字符串
+            var builder strings.Builder
+            keywords := []string{"sansui233", "目前共有抓取源", "最后更新时间"}
+            keywordCount := 0
+
+            // 逐行读取并检查关键词
+            for {
+                line, err := reader.ReadString('\n')
                 if err != nil {
-                    return
+                    break
+                }
+                builder.WriteString(strings.ToLower(line))
+
+                // 每累积约 1KB 数据检查一次关键词
+                if builder.Len() > 1024 {
+                    for _, keyword := range keywords {
+                        if strings.Contains(builder.String(), keyword) {
+                            keywordCount++
+                        }
+                    }
+                    builder.Reset()
+                    
+                    // 如果所有关键词都找到，提前结束
+                    if keywordCount == len(keywords) {
+                        break
+                    }
                 }
             }
 
-            // 转换为小写并检查关键字
-            bodyLower := strings.ToLower(string(body))
-            if strings.Contains(bodyLower, "sansui233") &&
-               strings.Contains(bodyLower, "目前共有抓取源") {
+            // 最后检查一次
+            for _, keyword := range keywords {
+                if strings.Contains(builder.String(), keyword) {
+                    keywordCount++
+                }
+            }
+
+            if keywordCount == len(keywords) {
                 validDomains.Store(domain, struct{}{})
                 atomic.AddInt64(&validCount, 1)
             }
