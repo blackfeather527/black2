@@ -343,13 +343,6 @@ func isValidDomain(domain Domain) bool {
     return false
 }
 
-
-// ProxyInfo 结构体用于存储单条代理信息
-type ProxyInfo struct {
-    Protocol string // 代理协议
-    FullInfo string // 完整的代理信息
-}
-
 // fetchProxies 函数用于获取、解码和处理订阅信息
 func fetchProxies(domains []Domain, relativePath string) []ProxyInfo {
     // 确保相对路径以 "/" 开头
