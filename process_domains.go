@@ -1,349 +1,69 @@
 package main
 
 import (
-    
-    "encoding/base64"
-    "io"
-    "io/ioutil"
-    "net/http"
-    "strings"
-    "sync"
-    "sync/atomic"
-    "time"
     "bufio"
-    "context"
-    "crypto/tls"
-    "database/sql"
     "flag"
     "fmt"
+    "log"
     "net/url"
     "os"
-
-    "golang.org/x/time/rate"
-    _ "github.com/mattn/go-sqlite3"
-    "log"
+    "strings"
 )
-
-const (
-    maxConcurrent = 10
-    maxRetries    = 3
-    timeout       = 5 * time.Second
-)
-
-var (
-    inputPath        *string
-    outputDir        *string
-    failureThreshold *int
-    silentDays       *int
-    dbPath           *string
-)
-
-var limiter = rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
-
-type Domain struct {
-    Protocol string
-    Host     string
-    Port     string
-}
-
-func init() {
-    // 定义命令行参数
-    inputPath = flag.String("input", "domains.txt", "输入文件路径")
-    outputDir = flag.String("output", ".", "输出文件目录")
-    failureThreshold = flag.Int("failures", 5, "检测失败次数阈值")
-    silentDays = flag.Int("silent", 7, "检测静默天数")
-    dbPath = flag.String("db", "domains.db", "SQLite 数据库路径")
-}
 
 func main() {
-    // 解析命令行参数
+    // 定义命令行参数
+    inputPath := flag.String("input", "domains.txt", "输入文件路径")
+    outputDir := flag.String("output", ".", "输出文件目录")
     flag.Parse()
 
-    // 打印命令行参数以防止未使用警告
-    fmt.Printf("输入文件路径: %s\n", *inputPath)
-    fmt.Printf("输出文件目录: %s\n", *outputDir)
-    fmt.Printf("检测失败次数阈值: %d\n", *failureThreshold)
-    fmt.Printf("检测静默天数: %d\n", *silentDays)
-    fmt.Printf("SQLite 数据库路径: %s\n", *dbPath)
+    // 打印所有命令行参数，以防出现未使用警告
+    log.Printf("输入文件路径: %s", *inputPath)
+    log.Printf("输出文件目录: %s", *outputDir)
 
     // 调用函数处理输入文件
-    domains := processDomainFile(*inputPath)
+    validDomains := processInputFile(*inputPath)
 
-    // 检查域名的有效性
-    validDomains := checkDomains(domains)
-    
-    allProxies := fetchProxies(validDomains, "vmess/sub")
-
-    fmt.Printf("去重后总共有 %d 条唯一代理信息\n", len(allProxies))
+    // 在这里可以继续处理 validDomains
+    log.Printf("有效域名总数: %d", len(validDomains))
 }
 
-// processDomainFile 函数用于处理包含域名的文件
-// 输入参数 inputPath 是文件的路径
-// 返回一个 Domain 结构体的切片，包含所有解析成功的唯一域名
-func processDomainFile(inputPath string) []Domain {
-    // 打开文件
+func processInputFile(inputPath string) []string {
     file, err := os.Open(inputPath)
     if err != nil {
-        fmt.Printf("打开文件失败: %v\n", err)
-        return nil
+        log.Fatalf("打开输入文件时出错: %v", err)
     }
-    defer file.Close() // 确保在函数结束时关闭文件
+    defer file.Close()
 
-    // 初始化一个map来存储唯一的域名
-    // 预分配容量为1000，减少后续可能的扩容操作
-    domainMap := make(map[string]Domain, 1000)
-    scanner := bufio.NewScanner(file) // 创建一个scanner来读取文件
-    lineCount := 0  // 记录总行数
-    validCount := 0 // 记录有效域名数
+    scanner := bufio.NewScanner(file)
+    var validDomains []string
 
-    // 创建一个strings.Builder用于高效地构建字符串
-    var keyBuilder strings.Builder
-    keyBuilder.Grow(256) // 预分配Builder的容量，减少内存分配
-
-    // 逐行读取文件
     for scanner.Scan() {
-        lineCount++
-        line := strings.TrimSpace(scanner.Text()) // 去除行首尾的空白字符
+        line := strings.TrimSpace(scanner.Text())
         if line == "" {
             continue // 跳过空行
         }
 
-        // 解析URL
+        // 解析并验证 URL
         u, err := url.Parse(line)
-        if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-            fmt.Printf("第 %d 行格式不正确: %s\n", lineCount, line)
+        if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+            log.Printf("无效的 URL: %s", line)
             continue
         }
 
-        // 创建Domain结构体
-        domain := Domain{
-            Protocol: u.Scheme,
-            Host:     u.Hostname(),
-            Port:     u.Port(),
+        // 构建标准化的 URL
+        standardURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
+        if u.Port() != "" {
+            standardURL += ":" + u.Port()
         }
 
-        // 如果端口为空，根据协议设置默认端口
-        if domain.Port == "" {
-            if domain.Protocol == "http" {
-                domain.Port = "80"
-            } else {
-                domain.Port = "443"
-            }
-        }
-
-        // 使用strings.Builder构建map的key
-        keyBuilder.Reset() // 重置Builder
-        keyBuilder.WriteString(domain.Host)
-        if domain.Port != "80" && domain.Port != "443" {
-            keyBuilder.WriteByte(':')
-            keyBuilder.WriteString(domain.Port)
-        }
-        key := keyBuilder.String()
-        
-        // 如果域名不存在于map中，则添加
-        if _, exists := domainMap[key]; !exists {
-            domainMap[key] = domain
-            validCount++
-        }
+        validDomains = append(validDomains, standardURL)
+        log.Printf("有效域名: %s", standardURL)
     }
 
-    // 检查是否在读取文件时发生错误
     if err := scanner.Err(); err != nil {
-        fmt.Printf("读取文件时发生错误: %v\n", err)
+        log.Fatalf("读取输入文件时出错: %v", err)
     }
 
-    // 将map中的域名转换为切片
-    domains := make([]Domain, 0, validCount) // 预分配切片容量
-    for _, domain := range domainMap {
-        domains = append(domains, domain)
-    }
-
-    // 打印统计信息
-    fmt.Printf("总行数: %d, 唯一有效域名数: %d\n", lineCount, validCount)
-    return domains
-}
-
-func checkDomains(domains []Domain) []Domain {
-    db, err := sql.Open("sqlite3", *dbPath)
-    if err != nil {
-        log.Fatalf("初始化数据库失败: %v", err)
-    }
-    defer db.Close()
-
-    if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS domain_checks (domain TEXT PRIMARY KEY, failure_count INT, last_check DATETIME)`); err != nil {
-        log.Fatalf("创建表失败: %v", err)
-    }
-
-    var validDomains []Domain
-    var mu sync.Mutex
-    semaphore := make(chan struct{}, maxConcurrent)
-    checkedCount := int32(0)
-    client := &http.Client{Timeout: timeout, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
-
-    var wg sync.WaitGroup
-    for _, domain := range domains {
-        wg.Add(1)
-        go func(d Domain) {
-            defer wg.Done()
-            semaphore <- struct{}{}
-            defer func() { <-semaphore }()
-
-            if err := limiter.Wait(context.Background()); err != nil {
-                log.Printf("限速器错误: %v", err)
-                return
-            }
-
-            domainStr := fmt.Sprintf("%s://%s:%s", d.Protocol, d.Host, d.Port)
-            var failureCount int
-            var lastCheck time.Time
-            if err := db.QueryRow("SELECT failure_count, last_check FROM domain_checks WHERE domain = ?", domainStr).Scan(&failureCount, &lastCheck); err != nil && err != sql.ErrNoRows {
-                log.Printf("查询域名状态失败: %v", err)
-                return
-            }
-
-            if failureCount >= *failureThreshold && time.Since(lastCheck) < time.Duration(*silentDays)*24*time.Hour {
-                return
-            }
-            atomic.AddInt32(&checkedCount, 1)
-            isValid := false
-            for i := 0; i < maxRetries && !isValid; i++ {
-                if resp, err := client.Get(domainStr); err == nil {
-                    if body, _ := ioutil.ReadAll(resp.Body); body != nil {
-                        bodyString := strings.ToValidUTF8(string(body), "")
-                        isValid = strings.Contains(bodyString, "Sansui233") && strings.Contains(bodyString, "目前共有抓取源")
-                    }
-                    resp.Body.Close()
-                }
-                if !isValid && i < maxRetries-1 {
-                    time.Sleep(time.Second * time.Duration(i+1))
-                }
-            }
-
-            if isValid {
-                mu.Lock()
-                validDomains = append(validDomains, d)
-                mu.Unlock()
-                db.Exec("DELETE FROM domain_checks WHERE domain = ?", domainStr)
-            } else {
-                db.Exec(`INSERT INTO domain_checks (domain, failure_count, last_check) VALUES (?, 1, CURRENT_TIMESTAMP) ON CONFLICT(domain) DO UPDATE SET failure_count = failure_count + 1, last_check = CURRENT_TIMESTAMP`, domainStr)
-            }
-        }(domain)
-    }
-
-    wg.Wait()
-    log.Printf("检查完成，总检查域名数量: %d, 有效域名数量: %d", atomic.LoadInt32(&checkedCount), len(validDomains))
+    log.Printf("处理完成。共找到 %d 个有效域名", len(validDomains))
     return validDomains
-}
-
-
-// fetchProxies 函数用于从给定的域名列表中获取代理订阅信息
-//
-// 主要功能：
-// 1. 并发地从多个域名获取订阅信息
-// 2. 解码并解析订阅内容，提取有效的代理信息
-// 3. 对所有获取到的代理信息进行去重
-// 4. 控制并发数和请求速率，避免对服务器造成过大压力
-//
-// 参数：
-// - domains: 包含多个Domain结构体的切片，每个结构体代表一个待查询的域名
-// - relativePath: 获取订阅信息的相对路径
-//
-// 返回：
-// - []string: 包含所有唯一的代理信息的字符串切片
-
-func fetchProxies(domains []Domain, relativePath string) []string {
-    // 确保相对路径以 "/" 开头
-    if !strings.HasPrefix(relativePath, "/") {
-        relativePath = "/" + relativePath
-    }
-
-    var allProxies []string  // 存储所有获取到的代理信息
-    var mu sync.Mutex        // 互斥锁，用于保护 allProxies 的并发访问
-    semaphore := make(chan struct{}, maxConcurrent)  // 信号量，用于限制并发数
-    limiter := rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)  // 速率限制器
-
-    // 配置 HTTP 客户端
-    client := &http.Client{
-        Timeout: timeout,
-        Transport: &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},  // 忽略 SSL 证书验证
-            MaxIdleConnsPerHost: maxConcurrent,  // 优化连接复用
-        },
-    }
-
-    var wg sync.WaitGroup
-    for _, domain := range domains {
-        wg.Add(1)
-        go func(d Domain) {
-            defer wg.Done()
-            semaphore <- struct{}{}  // 获取信号量
-            defer func() { <-semaphore }()  // 释放信号量
-
-            // 等待速率限制器的许可
-            if err := limiter.Wait(context.Background()); err != nil {
-                fmt.Printf("限速器错误: %v\n", err)
-                return
-            }
-
-            // 构建完整的 URL
-            url := fmt.Sprintf("%s://%s:%s%s", d.Protocol, d.Host, d.Port, relativePath)
-            
-            // 发送 GET 请求
-            resp, err := client.Get(url)
-            if err != nil {
-                fmt.Printf("获取订阅失败 %s: %v\n", url, err)
-                return
-            }
-            defer resp.Body.Close()
-
-            // 读取响应体
-            body, err := io.ReadAll(resp.Body)
-            if err != nil {
-                fmt.Printf("读取响应体失败 %s: %v\n", url, err)
-                return
-            }
-
-            // Base64 解码
-            decodedBody, err := base64.StdEncoding.DecodeString(string(body))
-            if err != nil {
-                fmt.Printf("Base64解码失败 %s: %v\n", url, err)
-                return
-            }
-
-            // 分割解码后的内容为单独的代理信息
-            proxies := strings.Split(strings.TrimSpace(string(decodedBody)), "\n")
-            validProxies := make([]string, 0, len(proxies))
-
-            // 验证并收集有效的代理信息
-            for _, proxy := range proxies {
-                if strings.Contains(proxy, "://") {
-                    validProxies = append(validProxies, proxy)
-                }
-            }
-
-            // 将有效代理添加到总列表中
-            mu.Lock()
-            allProxies = append(allProxies, validProxies...)
-            mu.Unlock()
-
-            fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, len(validProxies))
-        }(domain)
-    }
-
-    wg.Wait()  // 等待所有 goroutine 完成
-
-    // 使用 map 进行去重
-    uniqueProxies := make(map[string]struct{})
-    for _, proxy := range allProxies {
-        uniqueProxies[proxy] = struct{}{}
-    }
-
-    // 将去重后的代理信息转换为切片
-    result := make([]string, 0, len(uniqueProxies))
-    for proxy := range uniqueProxies {
-        result = append(result, proxy)
-    }
-
-    fmt.Printf("总共获取到 %d 条代理信息，去重后剩余 %d 条\n", len(allProxies), len(result))
-    return result
 }
