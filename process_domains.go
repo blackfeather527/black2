@@ -3,13 +3,11 @@ package main
 import (
     
     "encoding/base64"
-    "encoding/json"
     "io"
     "io/ioutil"
     "net/http"
     "strings"
     "sync"
-    "sync/atomic"
     "time"
     "bufio"
     "context"
@@ -74,6 +72,8 @@ func main() {
     validDomains := checkDomains(domains)
     
     allProxies := fetchProxies(validDomains, "vmess/sub")
+
+    fmt.Printf("去重后总共有 %d 条唯一代理信息\n", len(allProxies))
 }
 
 // processDomainFile 函数用于处理包含域名的文件
