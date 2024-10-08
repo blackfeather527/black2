@@ -16,14 +16,6 @@ import (
     "golang.org/x/text/encoding/simplifiedchinese"
 )
 
-package main
-
-import (
-	"flag"
-	"log"
-	"sync"
-)
-
 func main() {
 	// 定义命令行参数
 	inputFile := flag.String("i", "domains.txt", "输入文件路径")
