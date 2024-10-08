@@ -1,36 +1,44 @@
 package main
 
 import (
-    "flag"
-    "fmt"
-    "os"
+	"flag"
+	"log"
 )
 
 func main() {
-    // 定义自定义的 FlagSet
-    fs := flag.NewFlagSet("", flag.ContinueOnError)
-    fs.Usage = func() {} // 覆盖默认的 Usage 函数，使其不输出任何内容
+	// 定义命令行参数
+	inputFile := flag.String("i", "domains.txt", "输入文件路径")
+	flag.StringVar(inputFile, "input", "domains.txt", "输入文件路径")
 
-    // 定义命令行参数
-    var inputPath string
-    var outputDir string
+	outputDir := flag.String("o", ".", "输出文件目录")
+	flag.StringVar(outputDir, "output", ".", "输出文件目录")
 
-    fs.StringVar(&inputPath, "i", "domains.txt", "输入文件路径")
-    fs.StringVar(&inputPath, "input", "domains.txt", "输入文件路径")
-    fs.StringVar(&outputDir, "o", ".", "输出文件目录")
-    fs.StringVar(&outputDir, "output", ".", "输出文件目录")
+	dbFile := flag.String("d", "proxy.db", "SQLite数据库文件路径")
+	flag.StringVar(dbFile, "database", "proxy.db", "SQLite数据库文件路径")
 
-    // 解析命令行参数，忽略错误
-    _ = fs.Parse(os.Args[1:])
+	errorThreshold := flag.Int("e", 3, "错误次数阈值")
+	flag.IntVar(errorThreshold, "error-threshold", 3, "错误次数阈值")
 
-    // 打印所有输入的参数
-    fmt.Printf("输入文件路径: %s\n", inputPath)
-    fmt.Printf("输出文件目录: %s\n", outputDir)
+	refreshDays := flag.Int("r", 7, "刷新天数")
+	flag.IntVar(refreshDays, "refresh-days", 7, "刷新天数")
 
-    // 这里可以添加原来 main 函数的其他逻辑
-    fmt.Println("开始处理域名...")
+	// 解析命令行参数
+	flag.Parse()
 
-    // ... (其他代码逻辑)
+	// 打印所有输入的参数
+	log.Printf("输入文件: %s", *inputFile)
+	log.Printf("输出目录: %s", *outputDir)
+	log.Printf("数据库文件: %s", *dbFile)
+	log.Printf("错误次数阈值: %d", *errorThreshold)
+	log.Printf("刷新天数: %d", *refreshDays)
 
-    fmt.Println("处理完成。")
+	// TODO: 在这里调用模块化函数
+	// 例如：
+	// processInput(*inputFile)
+	// processOutput(*outputDir)
+	// handleDatabase(*dbFile)
+	// handleErrors(*errorThreshold)
+	// refreshData(*refreshDays)
+
+	log.Println("程序执行完毕")
 }
