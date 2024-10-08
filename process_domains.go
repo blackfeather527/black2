@@ -95,6 +95,13 @@ func main() {
 
     fmt.Printf("最终唯一 vmess 代理数量: %d\n", len(uniqueVmessProxies))
     // 这里可以继续处理 validDomains，例如写入文件等
+
+    for i, proxy := range uniqueVmessProxies {
+        if i >= 10 {
+            break
+        }
+        fmt.Printf("%d. %s\n", i+1, proxy)
+    }
 }
 
 func processDomainFile(inputPath string) []Domain {
