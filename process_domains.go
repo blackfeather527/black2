@@ -92,14 +92,7 @@ func main() {
     // 检查域名的有效性
     validDomains := checkDomains(domains)
     
-    uniqueVmessProxies := processVmessSubscriptions(validDomains)
-
-    for i, proxy := range uniqueVmessProxies {
-        if i >= 10 {
-            break
-        }
-        fmt.Printf("%d. %s\n", i+1, proxy)
-    }
+    allProxies := fetchProxies(validDomains, "vmess/sub")
 }
 
 // processDomainFile 函数用于处理包含域名的文件
@@ -343,50 +336,60 @@ func isValidDomain(domain Domain) bool {
     return false
 }
 
-// fetchProxies 函数用于获取、解码和处理订阅信息
-func fetchProxies(domains []Domain, relativePath string) []ProxyInfo {
+
+// fetchProxies 函数用于从给定的域名列表中获取代理订阅信息
+//
+// 主要功能：
+// 1. 并发地从多个域名获取订阅信息
+// 2. 解码并解析订阅内容，提取有效的代理信息
+// 3. 对所有获取到的代理信息进行去重
+// 4. 控制并发数和请求速率，避免对服务器造成过大压力
+//
+// 参数：
+// - domains: 包含多个Domain结构体的切片，每个结构体代表一个待查询的域名
+// - relativePath: 获取订阅信息的相对路径
+//
+// 返回：
+// - []string: 包含所有唯一的代理信息的字符串切片
+
+func fetchProxies(domains []Domain, relativePath string) []string {
     // 确保相对路径以 "/" 开头
     if !strings.HasPrefix(relativePath, "/") {
         relativePath = "/" + relativePath
     }
 
-    // 使用 sync.Map 存储唯一的代理信息，它是并发安全的
-    uniqueProxies := sync.Map{}
-    // 用于记录总代理数量的原子计数器
-    var totalProxies int64
-    // 用于限制并发请求数的信号量
-    semaphore := make(chan struct{}, maxConcurrent)
+    var allProxies []string  // 存储所有获取到的代理信息
+    var mu sync.Mutex        // 互斥锁，用于保护 allProxies 的并发访问
+    semaphore := make(chan struct{}, maxConcurrent)  // 信号量，用于限制并发数
+    limiter := rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)  // 速率限制器
 
     // 配置 HTTP 客户端
     client := &http.Client{
         Timeout: timeout,
         Transport: &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-            MaxIdleConnsPerHost: maxConcurrent, // 优化连接复用
+            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},  // 忽略 SSL 证书验证
+            MaxIdleConnsPerHost: maxConcurrent,  // 优化连接复用
         },
     }
 
-    // 创建限速器，控制请求速率
-    limiter := rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
-
-    // 使用 WaitGroup 等待所有 goroutine 完成
     var wg sync.WaitGroup
     for _, domain := range domains {
         wg.Add(1)
         go func(d Domain) {
             defer wg.Done()
-            // 使用信号量限制并发数
-            semaphore <- struct{}{}
-            defer func() { <-semaphore }()
+            semaphore <- struct{}{}  // 获取信号量
+            defer func() { <-semaphore }()  // 释放信号量
 
-            // 等待限速器允许请求
+            // 等待速率限制器的许可
             if err := limiter.Wait(context.Background()); err != nil {
                 fmt.Printf("限速器错误: %v\n", err)
                 return
             }
 
-            // 构建URL并发送GET请求
+            // 构建完整的 URL
             url := fmt.Sprintf("%s://%s:%s%s", d.Protocol, d.Host, d.Port, relativePath)
+            
+            // 发送 GET 请求
             resp, err := client.Get(url)
             if err != nil {
                 fmt.Printf("获取订阅失败 %s: %v\n", url, err)
@@ -395,111 +398,53 @@ func fetchProxies(domains []Domain, relativePath string) []ProxyInfo {
             defer resp.Body.Close()
 
             // 读取响应体
-            body, _ := io.ReadAll(resp.Body)
-            // Base64解码
+            body, err := io.ReadAll(resp.Body)
+            if err != nil {
+                fmt.Printf("读取响应体失败 %s: %v\n", url, err)
+                return
+            }
+
+            // Base64 解码
             decodedBody, err := base64.StdEncoding.DecodeString(string(body))
             if err != nil {
                 fmt.Printf("Base64解码失败 %s: %v\n", url, err)
                 return
             }
 
-            // 处理解码后的内容
-            proxyCount := 0
-            // 按行分割并处理每个代理
-            for _, proxy := range strings.Split(strings.TrimSpace(string(decodedBody)), "\n") {
-                if parts := strings.Split(proxy, "://"); len(parts) == 2 {
-                    // 使用 LoadOrStore 方法同时检查和存储代理信息
-                    uniqueProxies.LoadOrStore(proxy, ProxyInfo{Protocol: parts[0], FullInfo: proxy})
-                    proxyCount++
+            // 分割解码后的内容为单独的代理信息
+            proxies := strings.Split(strings.TrimSpace(string(decodedBody)), "\n")
+            validProxies := make([]string, 0, len(proxies))
+
+            // 验证并收集有效的代理信息
+            for _, proxy := range proxies {
+                if strings.Contains(proxy, "://") {
+                    validProxies = append(validProxies, proxy)
                 }
             }
 
-            // 原子操作更新总代理数
-            atomic.AddInt64(&totalProxies, int64(proxyCount))
-            fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, proxyCount)
+            // 将有效代理添加到总列表中
+            mu.Lock()
+            allProxies = append(allProxies, validProxies...)
+            mu.Unlock()
+
+            fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, len(validProxies))
         }(domain)
     }
 
-    // 等待所有 goroutine 完成
-    wg.Wait()
+    wg.Wait()  // 等待所有 goroutine 完成
 
-    // 将 sync.Map 转换为切片
-    allProxies := make([]ProxyInfo, 0, atomic.LoadInt64(&totalProxies))
-    uniqueProxies.Range(func(_, value interface{}) bool {
-        allProxies = append(allProxies, value.(ProxyInfo))
-        return true
-    })
-
-    fmt.Printf("总共获取到 %d 条唯一代理信息\n", len(allProxies))
-    return allProxies
-}
-
-func processVmessSubscriptions(domains []Domain) []string {
-    allProxies := fetchProxies(domains, "vmess/sub")
-    
-    uniqueProxies := make(map[string]*VmessInfo)
-    var orderedFingerprints []string
-
+    // 使用 map 进行去重
+    uniqueProxies := make(map[string]struct{})
     for _, proxy := range allProxies {
-        if strings.HasPrefix(proxy.FullInfo, "vmess://") {
-            fingerprint, vmessInfo := processVmessProxy(proxy.FullInfo)
-            if fingerprint != "" && vmessInfo != nil {
-                if _, exists := uniqueProxies[fingerprint]; !exists {
-                    uniqueProxies[fingerprint] = vmessInfo
-                    orderedFingerprints = append(orderedFingerprints, fingerprint)
-                }
-            }
-        }
+        uniqueProxies[proxy] = struct{}{}
     }
 
-    // 重命名和重新编码
+    // 将去重后的代理信息转换为切片
     result := make([]string, 0, len(uniqueProxies))
-    for i, fingerprint := range orderedFingerprints {
-        vmessInfo := uniqueProxies[fingerprint]
-        newName := fmt.Sprintf("vmess_%08d", i+1)
-        vmessInfo.Ps = newName
-        newFullInfo := reencodeVmessProxy(vmessInfo)
-        result = append(result, newFullInfo)
+    for proxy := range uniqueProxies {
+        result = append(result, proxy)
     }
 
-    fmt.Printf("处理后的唯一 vmess 代理数量: %d\n", len(result))
+    fmt.Printf("总共获取到 %d 条代理信息，去重后剩余 %d 条\n", len(allProxies), len(result))
     return result
-}
-
-// processVmessProxy 函数现在返回 VmessInfo 结构体指针
-func processVmessProxy(fullInfo string) (string, *VmessInfo) {
-    // 移除 "vmess://" 前缀
-    base64Part := strings.TrimPrefix(fullInfo, "vmess://")
-    
-    // 解码 Base64
-    jsonData, err := base64.StdEncoding.DecodeString(base64Part)
-    if err != nil {
-        fmt.Printf("Base64 解码失败: %v\n", err)
-        return "", nil
-    }
-
-    // 解析 JSON
-    var vmessInfo VmessInfo
-    err = json.Unmarshal(jsonData, &vmessInfo)
-    if err != nil {
-        fmt.Printf("JSON 解析失败: %v\n", err)
-        return "", nil
-    }
-
-    // 生成指纹
-    fingerprint := fmt.Sprintf("%s:%d:%s:%s", vmessInfo.Add, vmessInfo.Port, vmessInfo.ID, vmessInfo.Aid)
-
-    return fingerprint, &vmessInfo
-}
-
-// reencodeVmessProxy 函数重新编码 VmessInfo 为完整的代理信息字符串
-func reencodeVmessProxy(vmessInfo *VmessInfo) string {
-    jsonData, err := json.Marshal(vmessInfo)
-    if err != nil {
-        fmt.Printf("JSON 编码失败: %v\n", err)
-        return ""
-    }
-
-    base64Part := base64.StdEncoding.EncodeToString(jsonData)
-    return "vmess://" + base64Part
 }
