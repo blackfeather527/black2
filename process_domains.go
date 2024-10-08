@@ -13,8 +13,31 @@ import (
 func main() {
     // 定义命令行参数
     inputPath := flag.String("input", "domains.txt", "输入文件路径")
+    flag.StringVar(inputPath, "i", "domains.txt", "输入文件路径（短形式）")
+    
     outputDir := flag.String("output", ".", "输出文件目录")
+    flag.StringVar(outputDir, "o", ".", "输出文件目录（短形式）")
+
+    // 设置 Usage 函数来自定义帮助信息
+    flag.Usage = func() {
+        fmt.Fprintf(os.Stderr, "用法: %s [选项]\n", os.Args[0])
+        fmt.Fprintf(os.Stderr, "选项:\n")
+        flag.PrintDefaults()
+    }
+
+    // 解析命令行参数
     flag.Parse()
+
+    // 忽略未定义的参数
+    flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
+    args := os.Args[1:]
+    for len(args) > 0 {
+        if err := flag.CommandLine.Parse(args); err != nil {
+            args = args[1:]
+        } else {
+            break
+        }
+    }
 
     // 打印所有命令行参数，以防出现未使用警告
     log.Printf("输入文件路径: %s", *inputPath)
