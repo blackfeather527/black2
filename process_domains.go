@@ -2,7 +2,12 @@ package main
 
 import (
 	"flag"
+	"bufio"
 	"log"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
 )
 
 func main() {
@@ -32,13 +37,55 @@ func main() {
 	log.Printf("错误次数阈值: %d", *errorThreshold)
 	log.Printf("刷新天数: %d", *refreshDays)
 
-	// TODO: 在这里调用模块化函数
-	// 例如：
-	// processInput(*inputFile)
-	// processOutput(*outputDir)
-	// handleDatabase(*dbFile)
-	// handleErrors(*errorThreshold)
-	// refreshData(*refreshDays)
+	domains := readDomains(*inputFile)
+
+	// 使用返回的 domains
+	domainCount := 0
+	domains.Range(func(key, value interface{}) bool {
+		domainCount++
+		return true
+	})
+
+	log.Printf("从 sync.Map 中读取到的总域名数: %d", domainCount)
 
 	log.Println("程序执行完毕")
+}
+
+func readDomains(inputFile string) *sync.Map {
+	domains := &sync.Map{}
+	file, err := os.Open(inputFile)
+	if err != nil {
+		log.Fatalf("无法打开输入文件: %v", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	lineCount := 0
+	validDomainCount := 0
+
+	for scanner.Scan() {
+		lineCount++
+		if u, err := url.Parse(strings.TrimSpace(scanner.Text())); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			host := u.Host
+			if u.Port() == "" {
+				host = u.Hostname() + (map[string]string{"http": ":80", "https": ":443"}[u.Scheme])
+			}
+			formattedURL := u.Scheme + "://" + host
+			domains.Store(formattedURL, struct{}{})
+			log.Printf("组合域名: %s", formattedURL)
+			validDomainCount++
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatalf("读取文件时出错: %v", err)
+	}
+
+	if lineCount == 0 {
+		log.Fatalf("输入文件为空")
+	}
+
+	log.Printf("总行数: %d, 有效域名数: %d", lineCount, validDomainCount)
+
+	return domains
 }
