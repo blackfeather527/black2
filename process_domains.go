@@ -52,59 +52,34 @@ func main() {
 }
 
 func readDomains(inputFile string) *sync.Map {
-	domains := &sync.Map{}
-	uniqueDomains := make(map[string]struct{})
+	domains, uniqueDomains := &sync.Map{}, make(map[string]struct{}, 1000)
 	file, err := os.Open(inputFile)
 	if err != nil {
-		log.Fatalf("无法打开输入文件: %v", err)
+		log.Printf("无法打开输入文件: %v", err)
+		return domains
 	}
 	defer file.Close()
 
+	lineCount, validDomainCount := 0, 0
 	scanner := bufio.NewScanner(file)
-	lineCount := 0
-	validDomainCount := 0
-
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
 	for scanner.Scan() {
 		lineCount++
 		if u, err := url.Parse(strings.TrimSpace(scanner.Text())); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-			host := u.Hostname()
-			port := u.Port()
-
-			// 检查是否为默认端口
-			isDefaultPort := (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443")
-
-			// 生成用于去重的键
-			dedupeKey := host
-			if port != "" && !isDefaultPort {
-				dedupeKey += ":" + port
-			}
-
-			// 如果是新的域名，则添加到 uniqueDomains
+			host, port, isDefaultPort := u.Hostname(), u.Port(), (u.Scheme == "http" && u.Port() == "80") || (u.Scheme == "https" && u.Port() == "443")
+			dedupeKey := host + (map[bool]string{true: "", false: ":" + port}[isDefaultPort || port == ""])
 			if _, exists := uniqueDomains[dedupeKey]; !exists {
-				uniqueDomains[dedupeKey] = struct{}{}
-
-				// 生成最终的 URL
-				formattedURL := u.Scheme + "://" + host
-				if port != "" && !isDefaultPort {
-					formattedURL += ":" + port
-				}
-
+				uniqueDomains[dedupeKey], validDomainCount = struct{}{}, validDomainCount+1
+				formattedURL := u.Scheme + "://" + host + (map[bool]string{true: "", false: ":" + port}[isDefaultPort || port == ""])
 				domains.Store(formattedURL, struct{}{})
 				log.Printf("组合域名: %s", formattedURL)
-				validDomainCount++
 			}
 		}
 	}
-
 	if err := scanner.Err(); err != nil {
-		log.Fatalf("读取文件时出错: %v", err)
+		log.Printf("读取文件时出错: %v", err)
+		return &sync.Map{}
 	}
-
-	if lineCount == 0 {
-		log.Fatalf("输入文件为空")
-	}
-
 	log.Printf("总行数: %d, 有效域名数: %d", lineCount, validDomainCount)
-
 	return domains
 }
