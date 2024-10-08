@@ -3,6 +3,7 @@ package main
 import (
     
     "encoding/base64"
+    "encoding/json"
     "io/ioutil"
     "net/http"
     "strings"
@@ -49,6 +50,20 @@ type ProxyInfo struct {
     FullInfo string
 }
 
+type VmessInfo struct {
+    Add  string `json:"add"`
+    Port int    `json:"port"`
+    ID   string `json:"id"`
+    Aid  string `json:"aid"`
+    Ps   string `json:"ps"`
+    V    string `json:"v"`
+    Net  string `json:"net"`
+    Type string `json:"type"`
+    Host string `json:"host"`
+    Path string `json:"path"`
+    TLS  string `json:"tls"`
+}
+
 func init() {
     // 定义命令行参数
     inputPath = flag.String("input", "domains.txt", "输入文件路径")
@@ -76,8 +91,9 @@ func main() {
     validDomains := checkDomains(domains)
 
     fmt.Printf("最终有效域名数量: %d\n", len(validDomains))
-    allProxies := fetchSubscriptions(validDomains, "vmess/sub")
-    fmt.Printf("总共获取到 %d 条代理信息\n", len(allProxies))
+    uniqueVmessProxies := processVmessSubscriptions(validDomains)
+
+    fmt.Printf("最终唯一 vmess 代理数量: %d\n", len(uniqueVmessProxies))
     // 这里可以继续处理 validDomains，例如写入文件等
 }
 
@@ -409,4 +425,74 @@ func fetchAndDecodeSubscription(domain Domain, path string) []ProxyInfo {
 
     fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, len(proxies))
     return proxies
+}
+
+func processVmessSubscriptions(domains []Domain) []string {
+    allProxies := fetchSubscriptions(domains, "vmess/sub")
+    
+    uniqueProxies := make(map[string]*VmessInfo)
+    var orderedFingerprints []string
+
+    for _, proxy := range allProxies {
+        if strings.HasPrefix(proxy.FullInfo, "vmess://") {
+            fingerprint, vmessInfo := processVmessProxy(proxy.FullInfo)
+            if fingerprint != "" && vmessInfo != nil {
+                if _, exists := uniqueProxies[fingerprint]; !exists {
+                    uniqueProxies[fingerprint] = vmessInfo
+                    orderedFingerprints = append(orderedFingerprints, fingerprint)
+                }
+            }
+        }
+    }
+
+    // 重命名和重新编码
+    result := make([]string, 0, len(uniqueProxies))
+    for i, fingerprint := range orderedFingerprints {
+        vmessInfo := uniqueProxies[fingerprint]
+        newName := fmt.Sprintf("vmess_%08d", i+1)
+        vmessInfo.Ps = newName
+        newFullInfo := reencodeVmessProxy(vmessInfo)
+        result = append(result, newFullInfo)
+    }
+
+    fmt.Printf("处理后的唯一 vmess 代理数量: %d\n", len(result))
+    return result
+}
+
+// processVmessProxy 函数现在返回 VmessInfo 结构体指针
+func processVmessProxy(fullInfo string) (string, *VmessInfo) {
+    // 移除 "vmess://" 前缀
+    base64Part := strings.TrimPrefix(fullInfo, "vmess://")
+    
+    // 解码 Base64
+    jsonData, err := base64.StdEncoding.DecodeString(base64Part)
+    if err != nil {
+        fmt.Printf("Base64 解码失败: %v\n", err)
+        return "", nil
+    }
+
+    // 解析 JSON
+    var vmessInfo VmessInfo
+    err = json.Unmarshal(jsonData, &vmessInfo)
+    if err != nil {
+        fmt.Printf("JSON 解析失败: %v\n", err)
+        return "", nil
+    }
+
+    // 生成指纹
+    fingerprint := fmt.Sprintf("%s:%d:%s:%s", vmessInfo.Add, vmessInfo.Port, vmessInfo.ID, vmessInfo.Aid)
+
+    return fingerprint, &vmessInfo
+}
+
+// reencodeVmessProxy 函数重新编码 VmessInfo 为完整的代理信息字符串
+func reencodeVmessProxy(vmessInfo *VmessInfo) string {
+    jsonData, err := json.Marshal(vmessInfo)
+    if err != nil {
+        fmt.Printf("JSON 编码失败: %v\n", err)
+        return ""
+    }
+
+    base64Part := base64.StdEncoding.EncodeToString(jsonData)
+    return "vmess://" + base64Part
 }
