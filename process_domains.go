@@ -4,10 +4,12 @@ import (
     
     "encoding/base64"
     "encoding/json"
+    "io"
     "io/ioutil"
     "net/http"
     "strings"
     "sync"
+    "sync/atomic"
     "time"
     "bufio"
     "context"
@@ -89,12 +91,8 @@ func main() {
 
     // 检查域名的有效性
     validDomains := checkDomains(domains)
-
-    fmt.Printf("最终有效域名数量: %d\n", len(validDomains))
+    
     uniqueVmessProxies := processVmessSubscriptions(validDomains)
-
-    fmt.Printf("最终唯一 vmess 代理数量: %d\n", len(uniqueVmessProxies))
-    // 这里可以继续处理 validDomains，例如写入文件等
 
     for i, proxy := range uniqueVmessProxies {
         if i >= 10 {
@@ -104,77 +102,90 @@ func main() {
     }
 }
 
+// processDomainFile 函数用于处理包含域名的文件
+// 输入参数 inputPath 是文件的路径
+// 返回一个 Domain 结构体的切片，包含所有解析成功的唯一域名
 func processDomainFile(inputPath string) []Domain {
+    // 打开文件
     file, err := os.Open(inputPath)
     if err != nil {
         fmt.Printf("打开文件失败: %v\n", err)
         return nil
     }
-    defer file.Close()
+    defer file.Close() // 确保在函数结束时关闭文件
 
-    domainMap := make(map[string]Domain)
-    scanner := bufio.NewScanner(file)
-    lineCount := 0
-    validCount := 0
+    // 初始化一个map来存储唯一的域名
+    // 预分配容量为1000，减少后续可能的扩容操作
+    domainMap := make(map[string]Domain, 1000)
+    scanner := bufio.NewScanner(file) // 创建一个scanner来读取文件
+    lineCount := 0  // 记录总行数
+    validCount := 0 // 记录有效域名数
 
+    // 创建一个strings.Builder用于高效地构建字符串
+    var keyBuilder strings.Builder
+    keyBuilder.Grow(256) // 预分配Builder的容量，减少内存分配
+
+    // 逐行读取文件
     for scanner.Scan() {
         lineCount++
-        line := strings.TrimSpace(scanner.Text())
+        line := strings.TrimSpace(scanner.Text()) // 去除行首尾的空白字符
         if line == "" {
-            continue
+            continue // 跳过空行
         }
 
-        domain, ok := parseDomain(line)
-        if !ok {
+        // 解析URL
+        u, err := url.Parse(line)
+        if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
             fmt.Printf("第 %d 行格式不正确: %s\n", lineCount, line)
             continue
         }
 
-        key := domain.Host
-        if domain.Port != "80" && domain.Port != "443" {
-            key += ":" + domain.Port
+        // 创建Domain结构体
+        domain := Domain{
+            Protocol: u.Scheme,
+            Host:     u.Hostname(),
+            Port:     u.Port(),
         }
+
+        // 如果端口为空，根据协议设置默认端口
+        if domain.Port == "" {
+            if domain.Protocol == "http" {
+                domain.Port = "80"
+            } else {
+                domain.Port = "443"
+            }
+        }
+
+        // 使用strings.Builder构建map的key
+        keyBuilder.Reset() // 重置Builder
+        keyBuilder.WriteString(domain.Host)
+        if domain.Port != "80" && domain.Port != "443" {
+            keyBuilder.WriteByte(':')
+            keyBuilder.WriteString(domain.Port)
+        }
+        key := keyBuilder.String()
         
+        // 如果域名不存在于map中，则添加
         if _, exists := domainMap[key]; !exists {
             domainMap[key] = domain
             validCount++
         }
     }
 
+    // 检查是否在读取文件时发生错误
     if err := scanner.Err(); err != nil {
         fmt.Printf("读取文件时发生错误: %v\n", err)
     }
 
-    domains := make([]Domain, 0, len(domainMap))
+    // 将map中的域名转换为切片
+    domains := make([]Domain, 0, validCount) // 预分配切片容量
     for _, domain := range domainMap {
         domains = append(domains, domain)
     }
 
+    // 打印统计信息
     fmt.Printf("总行数: %d, 唯一有效域名数: %d\n", lineCount, validCount)
     return domains
-}
-
-func parseDomain(line string) (Domain, bool) {
-    u, err := url.Parse(line)
-    if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-        return Domain{}, false
-    }
-
-    domain := Domain{
-        Protocol: u.Scheme,
-        Host:     u.Hostname(),
-        Port:     u.Port(),
-    }
-
-    if domain.Port == "" {
-        if domain.Protocol == "http" {
-            domain.Port = "80"
-        } else {
-            domain.Port = "443"
-        }
-    }
-
-    return domain, true
 }
 
 func checkDomains(domains []Domain) []Domain {
@@ -333,109 +344,105 @@ func isValidDomain(domain Domain) bool {
 }
 
 
+// ProxyInfo 结构体用于存储单条代理信息
+type ProxyInfo struct {
+    Protocol string // 代理协议
+    FullInfo string // 完整的代理信息
+}
 
-
-// fetchSubscriptions 函数用于获取并处理订阅信息
-func fetchSubscriptions(domains []Domain, relativePath string) []ProxyInfo {
+// fetchProxies 函数用于获取、解码和处理订阅信息
+func fetchProxies(domains []Domain, relativePath string) []ProxyInfo {
     // 确保相对路径以 "/" 开头
     if !strings.HasPrefix(relativePath, "/") {
         relativePath = "/" + relativePath
     }
 
-    uniqueProxies := make(map[string]ProxyInfo)
-    var mu sync.Mutex
-    var wg sync.WaitGroup
+    // 使用 sync.Map 存储唯一的代理信息，它是并发安全的
+    uniqueProxies := sync.Map{}
+    // 用于记录总代理数量的原子计数器
+    var totalProxies int64
+    // 用于限制并发请求数的信号量
     semaphore := make(chan struct{}, maxConcurrent)
 
+    // 配置 HTTP 客户端
+    client := &http.Client{
+        Timeout: timeout,
+        Transport: &http.Transport{
+            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+            MaxIdleConnsPerHost: maxConcurrent, // 优化连接复用
+        },
+    }
+
+    // 创建限速器，控制请求速率
+    limiter := rate.NewLimiter(rate.Every(time.Second/10), maxConcurrent)
+
+    // 使用 WaitGroup 等待所有 goroutine 完成
+    var wg sync.WaitGroup
     for _, domain := range domains {
         wg.Add(1)
         go func(d Domain) {
             defer wg.Done()
+            // 使用信号量限制并发数
             semaphore <- struct{}{}
             defer func() { <-semaphore }()
 
+            // 等待限速器允许请求
             if err := limiter.Wait(context.Background()); err != nil {
                 fmt.Printf("限速器错误: %v\n", err)
                 return
             }
 
-            proxies := fetchAndDecodeSubscription(d, relativePath)
-            mu.Lock()
-            for _, proxy := range proxies {
-                uniqueProxies[proxy.FullInfo] = proxy
+            // 构建URL并发送GET请求
+            url := fmt.Sprintf("%s://%s:%s%s", d.Protocol, d.Host, d.Port, relativePath)
+            resp, err := client.Get(url)
+            if err != nil {
+                fmt.Printf("获取订阅失败 %s: %v\n", url, err)
+                return
             }
-            mu.Unlock()
+            defer resp.Body.Close()
+
+            // 读取响应体
+            body, _ := io.ReadAll(resp.Body)
+            // Base64解码
+            decodedBody, err := base64.StdEncoding.DecodeString(string(body))
+            if err != nil {
+                fmt.Printf("Base64解码失败 %s: %v\n", url, err)
+                return
+            }
+
+            // 处理解码后的内容
+            proxyCount := 0
+            // 按行分割并处理每个代理
+            for _, proxy := range strings.Split(strings.TrimSpace(string(decodedBody)), "\n") {
+                if parts := strings.Split(proxy, "://"); len(parts) == 2 {
+                    // 使用 LoadOrStore 方法同时检查和存储代理信息
+                    uniqueProxies.LoadOrStore(proxy, ProxyInfo{Protocol: parts[0], FullInfo: proxy})
+                    proxyCount++
+                }
+            }
+
+            // 原子操作更新总代理数
+            atomic.AddInt64(&totalProxies, int64(proxyCount))
+            fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, proxyCount)
         }(domain)
     }
 
+    // 等待所有 goroutine 完成
     wg.Wait()
 
-    // 将 map 转换为切片
-    allProxies := make([]ProxyInfo, 0, len(uniqueProxies))
-    for _, proxy := range uniqueProxies {
-        allProxies = append(allProxies, proxy)
-    }
+    // 将 sync.Map 转换为切片
+    allProxies := make([]ProxyInfo, 0, atomic.LoadInt64(&totalProxies))
+    uniqueProxies.Range(func(_, value interface{}) bool {
+        allProxies = append(allProxies, value.(ProxyInfo))
+        return true
+    })
 
     fmt.Printf("总共获取到 %d 条唯一代理信息\n", len(allProxies))
     return allProxies
 }
 
-// fetchAndDecodeSubscription 函数用于获取并解码单个域名的订阅信息
-func fetchAndDecodeSubscription(domain Domain, path string) []ProxyInfo {
-    url := fmt.Sprintf("%s://%s:%s%s", domain.Protocol, domain.Host, domain.Port, path)
-    client := &http.Client{
-        Timeout: timeout,
-        Transport: &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-        },
-    }
-
-    resp, err := client.Get(url)
-    if err != nil {
-        fmt.Printf("获取订阅失败 %s: %v\n", url, err)
-        return nil
-    }
-    defer resp.Body.Close()
-
-    body, err := ioutil.ReadAll(resp.Body)
-    if err != nil {
-        fmt.Printf("读取响应体失败 %s: %v\n", url, err)
-        return nil
-    }
-
-    decodedBody, err := base64.StdEncoding.DecodeString(string(body))
-    if err != nil {
-        fmt.Printf("Base64解码失败 %s: %v\n", url, err)
-        return nil
-    }
-
-    lines := strings.Split(string(decodedBody), "\n")
-    var proxies []ProxyInfo
-
-    for _, line := range lines {
-        line = strings.TrimSpace(line)
-        if line == "" {
-            continue
-        }
-
-        parts := strings.SplitN(line, "://", 2)
-        if len(parts) != 2 {
-            fmt.Printf("无效的代理信息: %s\n", line)
-            continue
-        }
-
-        proxies = append(proxies, ProxyInfo{
-            Protocol: parts[0],
-            FullInfo: line,
-        })
-    }
-
-    fmt.Printf("从 %s 获取到 %d 条代理信息\n", url, len(proxies))
-    return proxies
-}
-
 func processVmessSubscriptions(domains []Domain) []string {
-    allProxies := fetchSubscriptions(domains, "vmess/sub")
+    allProxies := fetchProxies(domains, "vmess/sub")
     
     uniqueProxies := make(map[string]*VmessInfo)
     var orderedFingerprints []string
