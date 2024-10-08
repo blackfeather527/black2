@@ -47,25 +47,6 @@ type Domain struct {
     Port     string
 }
 
-type ProxyInfo struct {
-    Protocol string
-    FullInfo string
-}
-
-type VmessInfo struct {
-    Add  string `json:"add"`
-    Port int    `json:"port"`
-    ID   string `json:"id"`
-    Aid  string `json:"aid"`
-    Ps   string `json:"ps"`
-    V    string `json:"v"`
-    Net  string `json:"net"`
-    Type string `json:"type"`
-    Host string `json:"host"`
-    Path string `json:"path"`
-    TLS  string `json:"tls"`
-}
-
 func init() {
     // 定义命令行参数
     inputPath = flag.String("input", "domains.txt", "输入文件路径")
