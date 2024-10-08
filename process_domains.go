@@ -18,13 +18,9 @@ import (
     "fmt"
     "net/url"
     "os"
-    "unicode/utf8"
 
     "golang.org/x/time/rate"
     _ "github.com/mattn/go-sqlite3"
-    "golang.org/x/text/encoding/simplifiedchinese"
-    "golang.org/x/text/transform"
-    "github.com/go-ego/gse"
     "log"
 )
 
