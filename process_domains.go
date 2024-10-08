@@ -51,8 +51,20 @@ func main() {
 	log.Println("程序执行完毕")
 }
 
+package main
+
+import (
+	"bufio"
+	"log"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+)
+
 func readDomains(inputFile string) *sync.Map {
 	domains := &sync.Map{}
+	uniqueDomains := make(map[string]struct{})
 	file, err := os.Open(inputFile)
 	if err != nil {
 		log.Fatalf("无法打开输入文件: %v", err)
@@ -66,14 +78,32 @@ func readDomains(inputFile string) *sync.Map {
 	for scanner.Scan() {
 		lineCount++
 		if u, err := url.Parse(strings.TrimSpace(scanner.Text())); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-			host := u.Host
-			if u.Port() == "" {
-				host = u.Hostname() + (map[string]string{"http": ":80", "https": ":443"}[u.Scheme])
+			host := u.Hostname()
+			port := u.Port()
+
+			// 检查是否为默认端口
+			isDefaultPort := (u.Scheme == "http" && port == "80") || (u.Scheme == "https" && port == "443")
+
+			// 生成用于去重的键
+			dedupeKey := host
+			if port != "" && !isDefaultPort {
+				dedupeKey += ":" + port
 			}
-			formattedURL := u.Scheme + "://" + host
-			domains.Store(formattedURL, struct{}{})
-			log.Printf("组合域名: %s", formattedURL)
-			validDomainCount++
+
+			// 如果是新的域名，则添加到 uniqueDomains
+			if _, exists := uniqueDomains[dedupeKey]; !exists {
+				uniqueDomains[dedupeKey] = struct{}{}
+
+				// 生成最终的 URL
+				formattedURL := u.Scheme + "://" + host
+				if port != "" && !isDefaultPort {
+					formattedURL += ":" + port
+				}
+
+				domains.Store(formattedURL, struct{}{})
+				log.Printf("组合域名: %s", formattedURL)
+				validDomainCount++
+			}
 		}
 	}
 
