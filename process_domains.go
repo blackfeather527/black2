@@ -126,18 +126,18 @@ func readDomains(inputFile string) *sync.Map {
 
 func checkDomains(domains *sync.Map) *sync.Map {
     validDomains := &sync.Map{}
-    var totalCount, headCount, validCount int64
+    var totalCount, tcpSuccessCount, validCount int64
     var wg sync.WaitGroup
-    semaphore := make(chan struct{}, 50) // 增加并发数到 50
+    semaphore := make(chan struct{}, 50) // 并发数为 50
 
     // 进度报告
     ticker := time.NewTicker(5 * time.Second)
     defer ticker.Stop()
     go func() {
         for range ticker.C {
-            log.Printf("进度: 总数 %d, HEAD 成功 %d, 有效 %d", 
+            log.Printf("进度: 总数 %d, TCP 成功 %d, 有效 %d", 
                        atomic.LoadInt64(&totalCount), 
-                       atomic.LoadInt64(&headCount), 
+                       atomic.LoadInt64(&tcpSuccessCount), 
                        atomic.LoadInt64(&validCount))
         }
     }()
@@ -150,24 +150,38 @@ func checkDomains(domains *sync.Map) *sync.Map {
             defer func() { <-semaphore }() // 释放信号量
 
             atomic.AddInt64(&totalCount, 1)
+
+            // 解析 URL 获取主机名和端口
+            u, err := url.Parse(domain)
+            if err != nil {
+                return
+            }
+            host := u.Hostname()
+            port := u.Port()
+            if port == "" {
+                if u.Scheme == "https" {
+                    port = "443"
+                } else {
+                    port = "80"
+                }
+            }
+
+            // 执行 TCP 连接测试（模拟 tcping）
+            conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 5*time.Second)
+            if err != nil {
+                return
+            }
+            conn.Close()
+            atomic.AddInt64(&tcpSuccessCount, 1)
+
+            // TCP 连接成功，继续进行 HTTP GET 请求
             client := &http.Client{
-                Timeout: 5 * time.Second, // 减少超时时间
+                Timeout: 10 * time.Second,
                 CheckRedirect: func(req *http.Request, via []*http.Request) error {
                     return http.ErrUseLastResponse
                 },
             }
-
-            // 发送 HEAD 请求
-            resp, err := client.Head(domain)
-            if err != nil {
-                return
-            }
-            defer resp.Body.Close()
-
-            atomic.AddInt64(&headCount, 1)
-
-            // 如果 HEAD 请求成功，发送 GET 请求
-            resp, err = client.Get(domain)
+            resp, err := client.Get(domain)
             if err != nil {
                 return
             }
@@ -182,9 +196,8 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 reader = bufio.NewReader(resp.Body)
             }
 
-            // 使用 strings.Builder 来构建低内存消耗的字符串
             var builder strings.Builder
-            keywords := []string{"sansui233", "目前共有抓取源", "最后更新时间"}
+            keywords := []string{"sansui233", "目前共有抓取源"}
             keywordCount := 0
 
             // 逐行读取并检查关键词
@@ -229,7 +242,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
     wg.Wait() // 等待所有 goroutine 完成
 
     log.Printf("总共检测的域名数: %d", atomic.LoadInt64(&totalCount))
-    log.Printf("能够 HEAD 的域名数: %d", atomic.LoadInt64(&headCount))
+    log.Printf("TCP 连接成功的域名数: %d", atomic.LoadInt64(&tcpSuccessCount))
     log.Printf("检测通过的域名数: %d", atomic.LoadInt64(&validCount))
 
     return validDomains
