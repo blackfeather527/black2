@@ -180,8 +180,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
             // 转换为小写并检查关键字
             bodyLower := strings.ToLower(string(body))
             if strings.Contains(bodyLower, "sansui233") &&
-               strings.Contains(bodyLower, "目前共有抓取源") &&
-               strings.Contains(bodyLower, "最后更新时间") {
+               strings.Contains(bodyLower, "目前共有抓取源") {
                 validDomains.Store(domain, struct{}{})
                 atomic.AddInt64(&validCount, 1)
             }
