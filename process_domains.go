@@ -181,7 +181,6 @@ func checkDomains(domains []Domain) []Domain {
 
     var validDomains []Domain
     var mu sync.Mutex
-    var wg sync.WaitGroup
     semaphore := make(chan struct{}, maxConcurrent)
     checkedCount := int32(0)
 
@@ -190,11 +189,7 @@ func checkDomains(domains []Domain) []Domain {
         Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
     }
 
-    seg, err := gse.New()
-    if err != nil {
-        log.Fatalf("初始化分词器失败: %v", err)
-    }
-
+    var wg sync.WaitGroup
     for _, domain := range domains {
         wg.Add(1)
         go func(d Domain) {
@@ -203,16 +198,15 @@ func checkDomains(domains []Domain) []Domain {
             defer func() { <-semaphore }()
 
             atomic.AddInt32(&checkedCount, 1)
-
             if err := limiter.Wait(context.Background()); err != nil {
                 log.Printf("限速器错误: %v", err)
                 return
             }
 
             domainStr := fmt.Sprintf("%s://%s:%s", d.Protocol, d.Host, d.Port)
-
             var failureCount int
             var lastCheck time.Time
+
             err := db.QueryRow("SELECT failure_count, last_check FROM domain_checks WHERE domain = ?", domainStr).
                 Scan(&failureCount, &lastCheck)
             if err != nil && err != sql.ErrNoRows {
@@ -229,13 +223,10 @@ func checkDomains(domains []Domain) []Domain {
                 if resp, err := client.Get(domainStr); err == nil {
                     body, _ := ioutil.ReadAll(resp.Body)
                     resp.Body.Close()
-
-                    utf8Body, _, _ := transform.Bytes(simplifiedchinese.GBK.NewDecoder(), body)
-                    simpleBody := seg.String(string(utf8Body))
-
-                    isValid = strings.Contains(simpleBody, "Sansui233") && strings.Contains(simpleBody, "目前共有抓取源")
+                    bodyString := strings.ToValidUTF8(string(body), "")
+                    isValid = strings.Contains(bodyString, "Sansui233") && strings.Contains(bodyString, "目前共有抓取源")
                 }
-                if !isValid {
+                if !isValid && i < maxRetries-1 {
                     time.Sleep(time.Second * time.Duration(i+1))
                 }
             }
@@ -244,22 +235,15 @@ func checkDomains(domains []Domain) []Domain {
                 mu.Lock()
                 validDomains = append(validDomains, d)
                 mu.Unlock()
-                // 检测通过后，删除记录（相当于将失败计数置零）
-                _, err = db.Exec("DELETE FROM domain_checks WHERE domain = ?", domainStr)
-                if err != nil {
-                    log.Printf("重置域名状态失败: %v", err)
-                }
+                db.Exec("DELETE FROM domain_checks WHERE domain = ?", domainStr)
             } else {
-                _, err = db.Exec(`
+                db.Exec(`
                     INSERT INTO domain_checks (domain, failure_count, last_check)
                     VALUES (?, 1, CURRENT_TIMESTAMP)
                     ON CONFLICT(domain) DO UPDATE SET
                     failure_count = failure_count + 1,
                     last_check = CURRENT_TIMESTAMP
                 `, domainStr)
-                if err != nil {
-                    log.Printf("更新域名状态失败: %v", err)
-                }
             }
         }(domain)
     }
