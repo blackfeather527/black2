@@ -33,6 +33,7 @@ jobs:
         go get golang.org/x/time/rate
         go get github.com/mattn/go-sqlite3
         go get golang.org/x/text/encoding/simplifiedchinese
+        go get golang.org/x/text/transform
 
     - name: Restore SQLite database
       run: |
