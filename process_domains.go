@@ -8,6 +8,7 @@ import (
     "net/http"
     "strings"
     "sync"
+    "sync/atomic"
     "time"
     "bufio"
     "context"
@@ -21,6 +22,10 @@ import (
 
     "golang.org/x/time/rate"
     _ "github.com/mattn/go-sqlite3"
+    "golang.org/x/text/encoding/simplifiedchinese"
+    "golang.org/x/text/transform"
+    "github.com/go-ego/gse"
+    "log"
 )
 
 const (
@@ -163,17 +168,30 @@ func processDomainFile(inputPath string) []Domain {
 }
 
 func checkDomains(domains []Domain) []Domain {
-    db, err := initDB()
+    db, err := sql.Open("sqlite3", *dbPath)
     if err != nil {
-        fmt.Printf("初始化数据库失败: %v\n", err)
-        return nil
+        log.Fatalf("初始化数据库失败: %v", err)
     }
     defer db.Close()
 
+    if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS domain_checks (
+        domain TEXT PRIMARY KEY, failure_count INT, last_check DATETIME
+    )`); err != nil {
+        log.Fatalf("创建表失败: %v", err)
+    }
+
     var validDomains []Domain
-    var wg sync.WaitGroup
     var mu sync.Mutex
+    var wg sync.WaitGroup
     semaphore := make(chan struct{}, maxConcurrent)
+    checkedCount := int32(0)
+
+    client := &http.Client{
+        Timeout: timeout,
+        Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+    }
+
+    seg := gse.New()
 
     for _, domain := range domains {
         wg.Add(1)
@@ -182,139 +200,71 @@ func checkDomains(domains []Domain) []Domain {
             semaphore <- struct{}{}
             defer func() { <-semaphore }()
 
+            atomic.AddInt32(&checkedCount, 1)
+
             if err := limiter.Wait(context.Background()); err != nil {
-                fmt.Printf("限速器错误: %v\n", err)
+                log.Printf("限速器错误: %v", err)
                 return
             }
 
-            shouldCheck, _ := shouldCheckDomain(db, d)
-            if !shouldCheck {
+            domainStr := fmt.Sprintf("%s://%s:%s", d.Protocol, d.Host, d.Port)
+
+            var failureCount int
+            var lastCheck time.Time
+            err := db.QueryRow("SELECT failure_count, last_check FROM domain_checks WHERE domain = ?", domainStr).
+                Scan(&failureCount, &lastCheck)
+            if err != nil && err != sql.ErrNoRows {
+                log.Printf("查询域名状态失败: %v", err)
                 return
             }
 
-            if isValidDomain(d) {
+            if failureCount >= *failureThreshold && time.Since(lastCheck) < time.Duration(*silentDays)*24*time.Hour {
+                return
+            }
+
+            isValid := false
+            for i := 0; i < maxRetries && !isValid; i++ {
+                if resp, err := client.Get(domainStr); err == nil {
+                    body, _ := ioutil.ReadAll(resp.Body)
+                    resp.Body.Close()
+
+                    utf8Body, _, _ := transform.Bytes(simplifiedchinese.GBK.NewDecoder(), body)
+                    simpleBody := seg.String(string(utf8Body))
+
+                    isValid = strings.Contains(simpleBody, "Sansui233") && strings.Contains(simpleBody, "目前共有抓取源")
+                }
+                if !isValid {
+                    time.Sleep(time.Second * time.Duration(i+1))
+                }
+            }
+
+            if isValid {
                 mu.Lock()
                 validDomains = append(validDomains, d)
                 mu.Unlock()
-                fmt.Printf("有效域名: %s://%s:%s\n", d.Protocol, d.Host, d.Port)
-                updateDomainStatus(db, d, true)
+                // 检测通过后，删除记录（相当于将失败计数置零）
+                _, err = db.Exec("DELETE FROM domain_checks WHERE domain = ?", domainStr)
+                if err != nil {
+                    log.Printf("重置域名状态失败: %v", err)
+                }
             } else {
-                updateDomainStatus(db, d, false)
+                _, err = db.Exec(`
+                    INSERT INTO domain_checks (domain, failure_count, last_check)
+                    VALUES (?, 1, CURRENT_TIMESTAMP)
+                    ON CONFLICT(domain) DO UPDATE SET
+                    failure_count = failure_count + 1,
+                    last_check = CURRENT_TIMESTAMP
+                `, domainStr)
+                if err != nil {
+                    log.Printf("更新域名状态失败: %v", err)
+                }
             }
         }(domain)
     }
 
     wg.Wait()
-
-    fmt.Printf("检查完成，有效域名数量: %d\n", len(validDomains))
+    log.Printf("检查完成，总检查域名数量: %d, 有效域名数量: %d", atomic.LoadInt32(&checkedCount), len(validDomains))
     return validDomains
-}
-
-func initDB() (*sql.DB, error) {
-    db, err := sql.Open("sqlite3", *dbPath)
-    if err != nil {
-        return nil, err
-    }
-
-    _, err = db.Exec(`
-        CREATE TABLE IF NOT EXISTS domain_checks (
-            domain TEXT PRIMARY KEY,
-            failure_count INT,
-            last_check DATETIME
-        )
-    `)
-    if err != nil {
-        return nil, err
-    }
-
-    return db, nil
-}
-
-func shouldCheckDomain(db *sql.DB, domain Domain) (bool, int) {
-    var failureCount int
-    var lastCheck time.Time
-    err := db.QueryRow("SELECT failure_count, last_check FROM domain_checks WHERE domain = ?", 
-                       fmt.Sprintf("%s://%s:%s", domain.Protocol, domain.Host, domain.Port)).
-           Scan(&failureCount, &lastCheck)
-
-    if err == sql.ErrNoRows {
-        return true, 0
-    } else if err != nil {
-        fmt.Printf("查询域名状态失败: %v\n", err)
-        return true, 0
-    }
-
-    if failureCount >= *failureThreshold && time.Since(lastCheck) < time.Duration(*silentDays)*24*time.Hour {
-        return false, failureCount
-    }
-
-    return true, failureCount
-}
-
-func updateDomainStatus(db *sql.DB, domain Domain, isValid bool) {
-    domainStr := fmt.Sprintf("%s://%s:%s", domain.Protocol, domain.Host, domain.Port)
-    if isValid {
-        _, err := db.Exec("DELETE FROM domain_checks WHERE domain = ?", domainStr)
-        if err != nil {
-            fmt.Printf("删除有效域名记录失败: %v\n", err)
-        }
-    } else {
-        _, err := db.Exec(`
-            INSERT INTO domain_checks (domain, failure_count, last_check)
-            VALUES (?, 1, CURRENT_TIMESTAMP)
-            ON CONFLICT(domain) DO UPDATE SET
-            failure_count = failure_count + 1,
-            last_check = CURRENT_TIMESTAMP
-        `, domainStr)
-        if err != nil {
-            fmt.Printf("更新域名状态失败: %v\n", err)
-        }
-    }
-}
-
-func isValidDomain(domain Domain) bool {
-    url := fmt.Sprintf("%s://%s:%s", domain.Protocol, domain.Host, domain.Port)
-    client := &http.Client{
-        Timeout: timeout,
-        Transport: &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-        },
-    }
-
-    for i := 0; i < maxRetries; i++ {
-        resp, err := client.Get(url)
-        if err != nil {
-            time.Sleep(time.Second * time.Duration(i+1))
-            continue
-        }
-        defer resp.Body.Close()
-
-        body, err := ioutil.ReadAll(resp.Body)
-        if err != nil {
-            fmt.Printf("读取 %s 的响应体时出错: %v\n", url, err)
-            continue
-        }
-
-        // 将 body 转换为 UTF-8 编码
-        bodyUTF8 := make([]rune, 0, len(body))
-        for len(body) > 0 {
-            r, size := utf8.DecodeRune(body)
-            if r == utf8.RuneError {
-                body = body[1:]
-            } else {
-                bodyUTF8 = append(bodyUTF8, r)
-                body = body[size:]
-            }
-        }
-        bodyString := string(bodyUTF8)
-
-        // 检查响应体是否包含特定字符串
-        if strings.Contains(bodyString, "Sansui233") && strings.Contains(bodyString, "目前共有抓取源") {
-            return true
-        }
-        break
-    }
-    return false
 }
 
 
