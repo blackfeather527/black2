@@ -51,35 +51,56 @@ func main() {
 	log.Println("程序执行完毕")
 }
 
+// readDomains 函数从指定文件中读取域名，进行格式化和去重，并返回有效的域名列表
+// 参数 inputFile 是输入文件的路径
+// 返回值是一个 *sync.Map，其中包含所有有效且唯一的域名
 func readDomains(inputFile string) *sync.Map {
+	// 初始化 sync.Map 用于存储最终的域名列表，以及一个 map 用于去重
+	// 预分配 uniqueDomains 的容量为 1000，以减少 map 扩容次数
 	domains, uniqueDomains := &sync.Map{}, make(map[string]struct{}, 1000)
+
+	// 打开输入文件
 	file, err := os.Open(inputFile)
 	if err != nil {
 		log.Printf("无法打开输入文件: %v", err)
-		return domains
+		return domains // 如果无法打开文件，返回空的 domains
 	}
-	defer file.Close()
+	defer file.Close() // 确保文件在函数结束时关闭
 
-	lineCount, validDomainCount := 0, 0
+	lineCount, validDomainCount := 0, 0 // 初始化行数和有效域名计数器
 	scanner := bufio.NewScanner(file)
+	// 增加 scanner 的缓冲区大小到 1MB，提高读取效率
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+
+	// 逐行读取文件内容
 	for scanner.Scan() {
-		lineCount++
+		lineCount++ // 增加行数计数
+		// 解析每一行为 URL
 		if u, err := url.Parse(strings.TrimSpace(scanner.Text())); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+			// 提取主机名、端口，并判断是否为默认端口
 			host, port, isDefaultPort := u.Hostname(), u.Port(), (u.Scheme == "http" && u.Port() == "80") || (u.Scheme == "https" && u.Port() == "443")
+			// 构造用于去重的 key
 			dedupeKey := host + (map[bool]string{true: "", false: ":" + port}[isDefaultPort || port == ""])
+			// 检查是否为重复域名
 			if _, exists := uniqueDomains[dedupeKey]; !exists {
+				// 如果不是重复域名，添加到 uniqueDomains 并增加有效域名计数
 				uniqueDomains[dedupeKey], validDomainCount = struct{}{}, validDomainCount+1
+				// 构造格式化的 URL
 				formattedURL := u.Scheme + "://" + host + (map[bool]string{true: "", false: ":" + port}[isDefaultPort || port == ""])
+				// 将格式化的 URL 存储到 domains 中
 				domains.Store(formattedURL, struct{}{})
 				log.Printf("组合域名: %s", formattedURL)
 			}
 		}
 	}
+
+	// 检查是否在读取过程中发生错误
 	if err := scanner.Err(); err != nil {
 		log.Printf("读取文件时出错: %v", err)
-		return &sync.Map{}
+		return &sync.Map{} // 如果发生错误，返回空的 sync.Map
 	}
+
+	// 输出统计信息
 	log.Printf("总行数: %d, 有效域名数: %d", lineCount, validDomainCount)
-	return domains
+	return domains // 返回处理后的域名列表
 }
