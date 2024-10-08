@@ -112,7 +112,7 @@ jobs:
       run: |
         # 创建输出目录并运行Go程序处理域名
         mkdir -p output
-        go run process_domains.go -i /tmp/fofa_output/domains.txt -o ./output
+        go run process_domains.go -i /tmp/fofa_output/domains.txt -o ./output -d /tmp/domains.db
       env:
         ACTIONS_STEP_DEBUG: true
 
