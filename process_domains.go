@@ -109,7 +109,6 @@ func readDomains(inputFile string) *sync.Map {
 				formattedURL := u.Scheme + "://" + host + (map[bool]string{true: "", false: ":" + port}[isDefaultPort || port == ""])
 				// 将格式化的 URL 存储到 domains 中
 				domains.Store(formattedURL, struct{}{})
-				log.Printf("组合域名: %s", formattedURL)
 			}
 		}
 	}
