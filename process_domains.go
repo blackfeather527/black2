@@ -190,7 +190,10 @@ func checkDomains(domains []Domain) []Domain {
         Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
     }
 
-    seg := gse.New()
+    seg, err := gse.New()
+    if err != nil {
+        log.Fatalf("初始化分词器失败: %v", err)
+    }
 
     for _, domain := range domains {
         wg.Add(1)
