@@ -1,92 +1,56 @@
 package main
 
 import (
-    "bufio"
     "flag"
     "fmt"
-    "log"
-    "net/url"
     "os"
-    "strings"
 )
 
 func main() {
     // 定义命令行参数
-    inputPath := flag.String("input", "domains.txt", "输入文件路径")
-    flag.StringVar(inputPath, "i", "domains.txt", "输入文件路径（短形式）")
-    
-    outputDir := flag.String("output", ".", "输出文件目录")
-    flag.StringVar(outputDir, "o", ".", "输出文件目录（短形式）")
+    var (
+        inputFile  string
+        outputDir  string
+        showHelp   bool
+    )
 
-    // 设置 Usage 函数来自定义帮助信息
+    // 设置命令行参数
+    flag.StringVar(&inputFile, "i", "domains.txt", "输入文件路径")
+    flag.StringVar(&inputFile, "input", "domains.txt", "输入文件路径")
+    flag.StringVar(&outputDir, "o", ".", "输出文件目录")
+    flag.StringVar(&outputDir, "output", ".", "输出文件目录")
+    flag.BoolVar(&showHelp, "h", false, "显示帮助信息")
+    flag.BoolVar(&showHelp, "help", false, "显示帮助信息")
+
+    // 自定义Usage函数来忽略未定义的参数
     flag.Usage = func() {
-        fmt.Fprintf(os.Stderr, "用法: %s [选项]\n", os.Args[0])
-        fmt.Fprintf(os.Stderr, "选项:\n")
+        fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
         flag.PrintDefaults()
     }
 
     // 解析命令行参数
     flag.Parse()
 
-    // 忽略未定义的参数
-    flag.CommandLine.Init(os.Args[0], flag.ContinueOnError)
-    args := os.Args[1:]
-    for len(args) > 0 {
-        if err := flag.CommandLine.Parse(args); err != nil {
-            args = args[1:]
-        } else {
-            break
-        }
+    // 显示帮助信息
+    if showHelp {
+        flag.Usage()
+        return
     }
 
-    // 打印所有命令行参数，以防出现未使用警告
-    log.Printf("输入文件路径: %s", *inputPath)
-    log.Printf("输出文件目录: %s", *outputDir)
+    // 打印所有输入的参数
+    fmt.Printf("输入文件: %s\n", inputFile)
+    fmt.Printf("输出目录: %s\n", outputDir)
 
-    // 调用函数处理输入文件
-    validDomains := processInputFile(*inputPath)
-
-    // 在这里可以继续处理 validDomains
-    log.Printf("有效域名总数: %d", len(validDomains))
-}
-
-func processInputFile(inputPath string) []string {
-    file, err := os.Open(inputPath)
-    if err != nil {
-        log.Fatalf("打开输入文件时出错: %v", err)
-    }
-    defer file.Close()
-
-    scanner := bufio.NewScanner(file)
-    var validDomains []string
-
-    for scanner.Scan() {
-        line := strings.TrimSpace(scanner.Text())
-        if line == "" {
-            continue // 跳过空行
-        }
-
-        // 解析并验证 URL
-        u, err := url.Parse(line)
-        if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-            log.Printf("无效的 URL: %s", line)
-            continue
-        }
-
-        // 构建标准化的 URL
-        standardURL := fmt.Sprintf("%s://%s", u.Scheme, u.Host)
-        if u.Port() != "" {
-            standardURL += ":" + u.Port()
-        }
-
-        validDomains = append(validDomains, standardURL)
-        log.Printf("有效域名: %s", standardURL)
+    // 打印未解析的参数
+    if len(flag.Args()) > 0 {
+        fmt.Println("未解析的参数:", flag.Args())
     }
 
-    if err := scanner.Err(); err != nil {
-        log.Fatalf("读取输入文件时出错: %v", err)
-    }
+    // 主程序逻辑
+    fmt.Println("开始处理域名...")
 
-    log.Printf("处理完成。共找到 %d 个有效域名", len(validDomains))
-    return validDomains
+    // 这里添加您的主要处理逻辑
+    // ...
+
+    fmt.Println("处理完成。")
 }
