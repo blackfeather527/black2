@@ -1,12 +1,26 @@
 package main
 
 import (
+    "bufio"
+    "flag"
+    "io/ioutil"
+    "log"
+    "net/http"
+    "net/url"
+    "os"
+    "strings"
+    "sync"
+    "sync/atomic"
+    "time"
+
+    "golang.org/x/text/encoding/simplifiedchinese"
+)
+
+package main
+
+import (
 	"flag"
-	"bufio"
 	"log"
-	"net/url"
-	"os"
-	"strings"
 	"sync"
 )
 
@@ -37,16 +51,30 @@ func main() {
 	log.Printf("错误次数阈值: %d", *errorThreshold)
 	log.Printf("刷新天数: %d", *refreshDays)
 
+	// 读取域名
 	domains := readDomains(*inputFile)
+	
+	// 检查域名
+	validDomains := checkDomains(domains)
 
-	// 使用返回的 domains
-	domainCount := 0
-	domains.Range(func(key, value interface{}) bool {
-		domainCount++
+	// 统计有效域名数量
+	validDomainCount := 0
+	validDomains.Range(func(key, value interface{}) bool {
+		validDomainCount++
+		return true
+	})
+	log.Printf("检测通过的有效域名数: %d", validDomainCount)
+
+	// 这里可以添加后续处理逻辑，例如将有效域名写入文件或数据库
+	// 为了示例，我们只打印一些信息
+	log.Printf("有效域名列表:")
+	validDomains.Range(func(key, value interface{}) bool {
+		log.Printf("- %s", key)
 		return true
 	})
 
-	log.Printf("从 sync.Map 中读取到的总域名数: %d", domainCount)
+	// 注意：outputDir, dbFile, errorThreshold, 和 refreshDays 
+	// 在这个示例中没有被直接使用，但它们可能在后续的功能实现中用到
 
 	log.Println("程序执行完毕")
 }
@@ -103,4 +131,77 @@ func readDomains(inputFile string) *sync.Map {
 	// 输出统计信息
 	log.Printf("总行数: %d, 有效域名数: %d", lineCount, validDomainCount)
 	return domains // 返回处理后的域名列表
+}
+
+func checkDomains(domains *sync.Map) *sync.Map {
+    validDomains := &sync.Map{}
+    var totalCount, headCount, validCount int64
+    var wg sync.WaitGroup
+    semaphore := make(chan struct{}, 10) // 限制并发数为10
+
+    domains.Range(func(key, value interface{}) bool {
+        wg.Add(1)
+        go func(domain string) {
+            defer wg.Done()
+            semaphore <- struct{}{} // 获取信号量
+            defer func() { <-semaphore }() // 释放信号量
+
+            atomic.AddInt64(&totalCount, 1)
+            client := &http.Client{
+                Timeout: 10 * time.Second,
+                CheckRedirect: func(req *http.Request, via []*http.Request) error {
+                    return http.ErrUseLastResponse
+                },
+            }
+
+            // 发送 HEAD 请求
+            resp, err := client.Head(domain)
+            if err != nil {
+                return
+            }
+            defer resp.Body.Close()
+
+            atomic.AddInt64(&headCount, 1)
+
+            // 如果 HEAD 请求成功，发送 GET 请求
+            resp, err = client.Get(domain)
+            if err != nil {
+                return
+            }
+            defer resp.Body.Close()
+
+            // 读取响应体
+            body, err := ioutil.ReadAll(resp.Body)
+            if err != nil {
+                return
+            }
+
+            // 处理可能的中文编码
+            contentType := resp.Header.Get("Content-Type")
+            if strings.Contains(contentType, "gbk") || strings.Contains(contentType, "gb2312") {
+                body, err = simplifiedchinese.GBK.NewDecoder().Bytes(body)
+                if err != nil {
+                    return
+                }
+            }
+
+            // 转换为小写并检查关键字
+            bodyLower := strings.ToLower(string(body))
+            if strings.Contains(bodyLower, "sansui233") &&
+               strings.Contains(bodyLower, "目前共有抓取源") &&
+               strings.Contains(bodyLower, "最后更新时间") {
+                validDomains.Store(domain, struct{}{})
+                atomic.AddInt64(&validCount, 1)
+            }
+        }(key.(string))
+        return true
+    })
+
+    wg.Wait() // 等待所有 goroutine 完成
+
+    log.Printf("总共检测的域名数: %d", atomic.LoadInt64(&totalCount))
+    log.Printf("能够 HEAD 的域名数: %d", atomic.LoadInt64(&headCount))
+    log.Printf("检测通过的域名数: %d", atomic.LoadInt64(&validCount))
+
+    return validDomains
 }
