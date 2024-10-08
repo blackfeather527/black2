@@ -3,7 +3,6 @@ package main
 import (
     "bufio"
     "flag"
-    "io/ioutil"
     "log"
     "net/http"
     "net/url"
