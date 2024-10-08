@@ -194,7 +194,7 @@ func checkDomains(domains []Domain) []Domain {
             semaphore <- struct{}{}
             defer func() { <-semaphore }()
 
-            atomic.AddInt32(&checkedCount, 1)
+            
             if err := limiter.Wait(context.Background()); err != nil {
                 log.Printf("限速器错误: %v", err)
                 return
@@ -214,7 +214,7 @@ func checkDomains(domains []Domain) []Domain {
             if failureCount >= *failureThreshold && time.Since(lastCheck) < time.Duration(*silentDays)*24*time.Hour {
                 return
             }
-
+            atomic.AddInt32(&checkedCount, 1)
             isValid := false
             for i := 0; i < maxRetries && !isValid; i++ {
                 if resp, err := client.Get(domainStr); err == nil {
