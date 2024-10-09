@@ -126,13 +126,23 @@ func readDomains(inputFile string) *sync.Map {
 }
 
 func checkDomains(domains *sync.Map) *sync.Map {
+    // 配置变量
+    const (
+        concurrency     = 50
+        tcpTimeout      = 5 * time.Second
+        httpTimeout     = 5 * time.Second
+        tcpRetries      = 3
+        httpRetries     = 3
+        progressInterval = 5 * time.Second
+    )
+
     validDomains := &sync.Map{}
     var totalCount, tcpSuccessCount, validCount int64
     var wg sync.WaitGroup
-    semaphore := make(chan struct{}, 50) // 并发数为 50
+    semaphore := make(chan struct{}, concurrency)
 
     // 进度报告
-    ticker := time.NewTicker(5 * time.Second)
+    ticker := time.NewTicker(progressInterval)
     defer ticker.Stop()
     go func() {
         for range ticker.C {
@@ -147,12 +157,11 @@ func checkDomains(domains *sync.Map) *sync.Map {
         wg.Add(1)
         go func(domain string) {
             defer wg.Done()
-            semaphore <- struct{}{} // 获取信号量
-            defer func() { <-semaphore }() // 释放信号量
+            semaphore <- struct{}{}
+            defer func() { <-semaphore }()
 
             atomic.AddInt64(&totalCount, 1)
 
-            // 解析 URL 获取主机名和端口
             u, err := url.Parse(domain)
             if err != nil {
                 return
@@ -167,23 +176,41 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 }
             }
 
-            // 执行 TCP 连接测试（模拟 tcping）
-            conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), 5*time.Second)
-            if err != nil {
+            // TCP 连接测试（带重试）
+            tcpSuccess := false
+            for i := 0; i < tcpRetries; i++ {
+                conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), tcpTimeout)
+                if err == nil {
+                    conn.Close()
+                    tcpSuccess = true
+                    atomic.AddInt64(&tcpSuccessCount, 1)
+                    break
+                }
+                time.Sleep(time.Second) // 重试前等待
+            }
+
+            if !tcpSuccess {
                 return
             }
-            conn.Close()
-            atomic.AddInt64(&tcpSuccessCount, 1)
 
-            // TCP 连接成功，继续进行 HTTP GET 请求
+            // HTTP GET 请求（带重试）
+            var resp *http.Response
             client := &http.Client{
-                Timeout: 10 * time.Second,
+                Timeout: httpTimeout,
                 CheckRedirect: func(req *http.Request, via []*http.Request) error {
                     return http.ErrUseLastResponse
                 },
             }
-            resp, err := client.Get(domain)
-            if err != nil {
+
+            for i := 0; i < httpRetries; i++ {
+                resp, err = client.Get(domain)
+                if err == nil {
+                    break
+                }
+                time.Sleep(time.Second) // 重试前等待
+            }
+
+            if err != nil || resp == nil {
                 return
             }
             defer resp.Body.Close()
@@ -209,7 +236,6 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 }
                 builder.WriteString(strings.ToLower(line))
 
-                // 每累积约 1KB 数据检查一次关键词
                 if builder.Len() > 1024 {
                     for _, keyword := range keywords {
                         if strings.Contains(builder.String(), keyword) {
@@ -218,7 +244,6 @@ func checkDomains(domains *sync.Map) *sync.Map {
                     }
                     builder.Reset()
                     
-                    // 如果所有关键词都找到，提前结束
                     if keywordCount == len(keywords) {
                         break
                     }
@@ -240,7 +265,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
         return true
     })
 
-    wg.Wait() // 等待所有 goroutine 完成
+    wg.Wait()
 
     log.Printf("总共检测的域名数: %d", atomic.LoadInt64(&totalCount))
     log.Printf("TCP 连接成功的域名数: %d", atomic.LoadInt64(&tcpSuccessCount))
