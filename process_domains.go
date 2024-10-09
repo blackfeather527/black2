@@ -13,8 +13,6 @@ import (
     "sync"
     "sync/atomic"
     "time"
-    "io"
-    "io/ioutil"
 )
 
 func main() {
@@ -129,14 +127,12 @@ func checkDomains(domains *sync.Map) *sync.Map {
     const (
         concurrency      = 50
         tcpTimeout       = 5 * time.Second
-        httpTimeout      = 5 * time.Second
         tcpRetries       = 3
-        httpRetries      = 3
         progressInterval = 5 * time.Second
     )
 
     validDomains := &sync.Map{}
-    var totalCount, tcpSuccessCount, validCount int64
+    var totalCount, tcpSuccessCount int64
     var wg sync.WaitGroup
     semaphore := make(chan struct{}, concurrency)
 
@@ -152,29 +148,14 @@ func checkDomains(domains *sync.Map) *sync.Map {
             case <-ctx.Done():
                 return
             case <-ticker.C:
-                log.Printf("进度: 总数 %d, TCP 成功 %d, 有效 %d", 
+                log.Printf("进度: 总数 %d, TCP 成功 %d", 
                            atomic.LoadInt64(&totalCount), 
-                           atomic.LoadInt64(&tcpSuccessCount), 
-                           atomic.LoadInt64(&validCount))
+                           atomic.LoadInt64(&tcpSuccessCount))
             }
         }
     }()
 
     dialer := &net.Dialer{Timeout: tcpTimeout}
-    transport := &http.Transport{
-        DialContext:           dialer.DialContext,
-        MaxIdleConns:          100,
-        IdleConnTimeout:       90 * time.Second,
-        TLSHandshakeTimeout:   5 * time.Second,
-        ExpectContinueTimeout: 1 * time.Second,
-    }
-    client := &http.Client{
-        Transport: transport,
-        Timeout:   httpTimeout,
-        CheckRedirect: func(req *http.Request, via []*http.Request) error {
-            return http.ErrUseLastResponse
-        },
-    }
 
     domains.Range(func(key, value interface{}) bool {
         wg.Add(1)
@@ -200,33 +181,12 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 if err == nil {
                     conn.Close()
                     atomic.AddInt64(&tcpSuccessCount, 1)
-                    break
-                }
-                if i == tcpRetries-1 {
+                    validDomains.Store(domain, struct{}{})
                     return
                 }
-                time.Sleep(time.Second)
-            }
-
-            // 检查 vmess/sub 路径
-            subURL := domain + "/vmess/sub"
-            for i := 0; i < httpRetries; i++ {
-                resp, err := client.Get(subURL)
-                if err == nil {
-                    // 读取并丢弃响应体，以确保连接可以被重用
-                    io.Copy(ioutil.Discard, resp.Body)
-                    resp.Body.Close()
-                    if resp.StatusCode == http.StatusOK {
-                        validDomains.Store(domain, struct{}{})
-                        atomic.AddInt64(&validCount, 1)
-                        return
-                    }
-                    break
+                if i < tcpRetries-1 {
+                    time.Sleep(time.Second)
                 }
-                if i == httpRetries-1 {
-                    return
-                }
-                time.Sleep(time.Second)
             }
         }(key.(string))
         return true
@@ -237,7 +197,6 @@ func checkDomains(domains *sync.Map) *sync.Map {
 
     log.Printf("总共检测的域名数: %d", atomic.LoadInt64(&totalCount))
     log.Printf("TCP 连接成功的域名数: %d", atomic.LoadInt64(&tcpSuccessCount))
-    log.Printf("检测通过的域名数: %d", atomic.LoadInt64(&validCount))
 
     return validDomains
 }
