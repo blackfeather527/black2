@@ -2,6 +2,8 @@ package main
 
 import (
     "bufio"
+    "context"
+    "io"
     "flag"
     "log"
     "net"
@@ -126,32 +128,40 @@ func readDomains(inputFile string) *sync.Map {
 }
 
 func checkDomains(domains *sync.Map) *sync.Map {
-    // 配置变量
     const (
-        concurrency     = 50
-        tcpTimeout      = 5 * time.Second
-        httpTimeout     = 5 * time.Second
-        tcpRetries      = 3
-        httpRetries     = 3
+        concurrency      = 50
+        tcpTimeout       = 5 * time.Second
+        httpTimeout      = 5 * time.Second
+        tcpRetries       = 3
+        httpRetries      = 3
         progressInterval = 5 * time.Second
+        bufferSize       = 4096
     )
 
     validDomains := &sync.Map{}
     var totalCount, tcpSuccessCount, validCount int64
     var wg sync.WaitGroup
     semaphore := make(chan struct{}, concurrency)
+    ctx, cancel := context.WithCancel(context.Background())
+    defer cancel()
 
-    // 进度报告
-    ticker := time.NewTicker(progressInterval)
-    defer ticker.Stop()
+    // 进度报告 goroutine
     go func() {
-        for range ticker.C {
-            log.Printf("进度: 总数 %d, TCP 成功 %d, 有效 %d", 
-                       atomic.LoadInt64(&totalCount), 
-                       atomic.LoadInt64(&tcpSuccessCount), 
-                       atomic.LoadInt64(&validCount))
-        }
+        ticker := time.NewTicker(progressInterval)
+        defer ticker.Stop()
+        for { select {
+            case <-ctx.Done(): return
+            case <-ticker.C: log.Printf("进度: 总数 %d, TCP 成功 %d, 有效 %d", atomic.LoadInt64(&totalCount), atomic.LoadInt64(&tcpSuccessCount), atomic.LoadInt64(&validCount))
+        }}
     }()
+
+    // 设置 HTTP 客户端
+    dialer := &net.Dialer{Timeout: tcpTimeout}
+    client := &http.Client{
+        Transport: &http.Transport{DialContext: dialer.DialContext, MaxIdleConns: 100, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 5 * time.Second, ExpectContinueTimeout: 1 * time.Second},
+        Timeout: httpTimeout,
+        CheckRedirect: func(req *http.Request, via []*http.Request) error { return http.ErrUseLastResponse },
+    }
 
     domains.Range(func(key, value interface{}) bool {
         wg.Add(1)
@@ -159,105 +169,54 @@ func checkDomains(domains *sync.Map) *sync.Map {
             defer wg.Done()
             semaphore <- struct{}{}
             defer func() { <-semaphore }()
-
             atomic.AddInt64(&totalCount, 1)
 
+            // 解析 URL 并获取主机名和端口
             u, err := url.Parse(domain)
-            if err != nil {
-                return
-            }
-            host := u.Hostname()
-            port := u.Port()
-            if port == "" {
-                if u.Scheme == "https" {
-                    port = "443"
-                } else {
-                    port = "80"
-                }
-            }
+            if err != nil { return }
+            host, port := u.Hostname(), u.Port()
+            if port == "" { port = map[string]string{"https": "443", "http": "80"}[u.Scheme] }
 
             // TCP 连接测试（带重试）
-            tcpSuccess := false
             for i := 0; i < tcpRetries; i++ {
-                conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, port), tcpTimeout)
-                if err == nil {
+                if conn, err := dialer.Dial("tcp", net.JoinHostPort(host, port)); err == nil {
                     conn.Close()
-                    tcpSuccess = true
                     atomic.AddInt64(&tcpSuccessCount, 1)
                     break
-                }
-                time.Sleep(time.Second) // 重试前等待
-            }
-
-            if !tcpSuccess {
-                return
+                } else if i == tcpRetries-1 { return }
+                time.Sleep(time.Second)
             }
 
             // HTTP GET 请求（带重试）
             var resp *http.Response
-            client := &http.Client{
-                Timeout: httpTimeout,
-                CheckRedirect: func(req *http.Request, via []*http.Request) error {
-                    return http.ErrUseLastResponse
-                },
-            }
-
             for i := 0; i < httpRetries; i++ {
-                resp, err = client.Get(domain)
-                if err == nil {
-                    break
-                }
-                time.Sleep(time.Second) // 重试前等待
-            }
-
-            if err != nil || resp == nil {
-                return
+                if resp, err = client.Get(domain); err == nil { break }
+                if i == httpRetries-1 { return }
+                time.Sleep(time.Second)
             }
             defer resp.Body.Close()
 
-            // 检查编码
-            contentType := resp.Header.Get("Content-Type")
-            var reader *bufio.Reader
-            if strings.Contains(contentType, "gbk") || strings.Contains(contentType, "gb2312") {
-                reader = bufio.NewReader(transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder()))
-            } else {
-                reader = bufio.NewReader(resp.Body)
+            // 检查编码和内容
+            reader := resp.Body
+            if ct := resp.Header.Get("Content-Type"); strings.Contains(ct, "gbk") || strings.Contains(ct, "gb2312") {
+                reader = transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder())
             }
 
-            var builder strings.Builder
-            keywords := []string{"sansui233", "目前共有抓取源"}
-            keywordCount := 0
-
-            // 逐行读取并检查关键词
+            keywords, keywordFound := []string{"sansui233", "目前共有抓取源"}, make([]bool, 2)
+            buffer := make([]byte, bufferSize)
             for {
-                line, err := reader.ReadString('\n')
-                if err != nil {
-                    break
-                }
-                builder.WriteString(strings.ToLower(line))
-
-                if builder.Len() > 1024 {
-                    for _, keyword := range keywords {
-                        if strings.Contains(builder.String(), keyword) {
-                            keywordCount++
-                        }
+                if n, err := reader.Read(buffer); err != nil && err != io.EOF {
+                    return
+                } else {
+                    content := strings.ToLower(string(buffer[:n]))
+                    for i, kw := range keywords {
+                        if !keywordFound[i] && strings.Contains(content, kw) { keywordFound[i] = true }
                     }
-                    builder.Reset()
-                    
-                    if keywordCount == len(keywords) {
-                        break
-                    }
+                    if err == io.EOF || (keywordFound[0] && keywordFound[1]) { break }
                 }
             }
 
-            // 最后检查一次
-            for _, keyword := range keywords {
-                if strings.Contains(builder.String(), keyword) {
-                    keywordCount++
-                }
-            }
-
-            if keywordCount == len(keywords) {
+            if keywordFound[0] && keywordFound[1] {
                 validDomains.Store(domain, struct{}{})
                 atomic.AddInt64(&validCount, 1)
             }
@@ -266,10 +225,10 @@ func checkDomains(domains *sync.Map) *sync.Map {
     })
 
     wg.Wait()
+    cancel()
 
-    log.Printf("总共检测的域名数: %d", atomic.LoadInt64(&totalCount))
-    log.Printf("TCP 连接成功的域名数: %d", atomic.LoadInt64(&tcpSuccessCount))
-    log.Printf("检测通过的域名数: %d", atomic.LoadInt64(&validCount))
+    // 输出最终统计信息
+    log.Printf("检测结果: 总数 %d, TCP 成功 %d, 有效 %d", atomic.LoadInt64(&totalCount), atomic.LoadInt64(&tcpSuccessCount), atomic.LoadInt64(&validCount))
 
     return validDomains
 }
