@@ -3,7 +3,6 @@ package main
 import (
     "bufio"
     "context"
-    "io"
     "flag"
     "log"
     "net"
