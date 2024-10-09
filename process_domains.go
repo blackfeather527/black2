@@ -211,7 +211,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
             }
 
             var config struct {
-                Proxies []string `yaml:"proxies"`
+                Proxies []map[string]interface{} `yaml:"proxies"`
             }
             err = yaml.Unmarshal(body, &config)
             if err != nil {
@@ -225,7 +225,13 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
             }
 
             log.Printf("从 %s 获取到配置文件", url)
-            for i, proxyStr := range config.Proxies {
+            for i, proxy := range config.Proxies {
+                proxyJSON, err := json.Marshal(proxy)
+                if err != nil {
+                    log.Printf("转换代理为JSON失败: %v", err)
+                    continue
+                }
+                proxyStr := string(proxyJSON)
                 proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
                 atomic.AddInt64(&totalProxies, 1)
 
