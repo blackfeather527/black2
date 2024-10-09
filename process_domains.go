@@ -176,6 +176,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
     proxiesMap := &sync.Map{}
     totalProxies := int64(0)
+    successfulSites := int64(0)
     var wg sync.WaitGroup
     sem := make(chan struct{}, concurrency)
 
@@ -213,7 +214,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
             }
 
             var config struct {
-                Proxies []interface{} `yaml:"proxies"`
+                Proxies []map[string]interface{} `yaml:"proxies"`
             }
             err = yaml.Unmarshal(body, &config)
             if err != nil {
@@ -226,22 +227,15 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 return
             }
 
-            log.Printf("从 %s 获取到配置文件", url)
-            for i, proxy := range config.Proxies {
-                stringProxy := convertToStringKeysRecursive(proxy)
-                proxyJSON, err := json.Marshal(stringProxy)
-                if err != nil {
-                    log.Printf("转换代理为JSON失败: %v", err)
-                    continue
-                }
-                proxyStr := string(proxyJSON)
-                proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
-
-                if i < 3 {
-                    log.Printf("示例代理 %d: %s", i+1, proxyStr)
+            for _, proxy := range config.Proxies {
+                key := generateProxyKey(proxy)
+                if key != "" {
+                    proxiesMap.Store(key, proxy)
                 }
             }
+
             atomic.AddInt64(&totalProxies, int64(len(config.Proxies)))
+            atomic.AddInt64(&successfulSites, 1)
             log.Printf("从 %s 总共解析到 %d 个代理", url, len(config.Proxies))
         }(key.(string))
         return true
@@ -249,22 +243,33 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
     wg.Wait()
 
+    log.Printf("成功获取配置文件的网站数量: %d", atomic.LoadInt64(&successfulSites))
     log.Printf("总共获取到 %d 个代理信息", atomic.LoadInt64(&totalProxies))
     return proxiesMap
 }
-// 递归转换函数
-func convertToStringKeysRecursive(v interface{}) interface{} {
-    switch v := v.(type) {
-    case map[interface{}]interface{}:
-        strMap := make(map[string]interface{})
-        for k, v2 := range v {
-            strMap[fmt.Sprintf("%v", k)] = convertToStringKeysRecursive(v2)
-        }
-        return strMap
-    case []interface{}:
-        for i, v2 := range v {
-            v[i] = convertToStringKeysRecursive(v2)
-        }
+
+func generateProxyKey(proxy map[string]interface{}) string {
+    proxyType, ok := proxy["type"].(string)
+    if !ok {
+        return ""
     }
-    return v
+
+    switch proxyType {
+    case "ss":
+        return fmt.Sprintf("ss|%s|%v|%s|%s",
+            proxy["server"], proxy["port"], proxy["password"], proxy["cipher"])
+    case "ssr":
+        return fmt.Sprintf("ssr|%s|%v|%s|%s|%s|%s",
+            proxy["server"], proxy["port"], proxy["password"], proxy["cipher"],
+            proxy["protocol"], proxy["obfs"])
+    case "vmess":
+        return fmt.Sprintf("vmess|%s|%v|%s|%v",
+            proxy["server"], proxy["port"], proxy["uuid"], proxy["alterId"])
+    case "trojan":
+        sni, _ := proxy["sni"].(string)
+        return fmt.Sprintf("trojan|%s|%v|%s|%s",
+            proxy["server"], proxy["port"], proxy["password"], sni)
+    default:
+        return ""
+    }
 }
