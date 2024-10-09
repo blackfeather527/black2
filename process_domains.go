@@ -13,6 +13,8 @@ import (
     "sync"
     "sync/atomic"
     "time"
+    "io"
+    "io/ioutil"
 )
 
 func main() {
@@ -127,9 +129,9 @@ func checkDomains(domains *sync.Map) *sync.Map {
     const (
         concurrency      = 50
         tcpTimeout       = 5 * time.Second
-        httpTimeout      = 10 * time.Second
+        httpTimeout      = 5 * time.Second
         tcpRetries       = 3
-        httpRetries      = 2
+        httpRetries      = 3
         progressInterval = 5 * time.Second
     )
 
@@ -208,18 +210,16 @@ func checkDomains(domains *sync.Map) *sync.Map {
 
             // 检查 vmess/sub 路径
             subURL := domain + "/vmess/sub"
-            var resp *http.Response
             for i := 0; i < httpRetries; i++ {
-                req, err := http.NewRequest("HEAD", subURL, nil)
-                if err != nil {
-                    continue
-                }
-                resp, err = client.Do(req)
+                resp, err := client.Get(subURL)
                 if err == nil {
-                    defer resp.Body.Close()
+                    // 读取并丢弃响应体，以确保连接可以被重用
+                    io.Copy(ioutil.Discard, resp.Body)
+                    resp.Body.Close()
                     if resp.StatusCode == http.StatusOK {
                         validDomains.Store(domain, struct{}{})
-			atomic.AddInt64(&validCount, 1)
+                        atomic.AddInt64(&validCount, 1)
+                        return
                     }
                     break
                 }
