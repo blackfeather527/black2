@@ -32,8 +32,7 @@ jobs:
         go mod init github.com/${{ github.repository }}
         go get golang.org/x/time/rate
         go get github.com/mattn/go-sqlite3
-        go get golang.org/x/text/encoding/simplifiedchinese
-        go get golang.org/x/text/transform
+        go get gopkg.in/yaml.v2
 
     - name: Restore SQLite database
       run: |
