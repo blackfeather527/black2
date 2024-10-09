@@ -218,11 +218,8 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 if err == nil {
                     defer resp.Body.Close()
                     if resp.StatusCode == http.StatusOK {
-                        contentType := resp.Header.Get("Content-Type")
-                        if strings.Contains(strings.ToLower(contentType), "text/") {
-                            validDomains.Store(domain, struct{}{})
-                            atomic.AddInt64(&validCount, 1)
-                        }
+                        validDomains.Store(domain, struct{}{})
+			atomic.AddInt64(&validCount, 1)
                     }
                     break
                 }
