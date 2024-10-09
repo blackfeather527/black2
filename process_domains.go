@@ -225,17 +225,37 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
             log.Printf("从 %s 获取到配置文件", url)
             for i, proxy := range proxies {
-                proxyYAML, err := yaml.Marshal(proxy)
+                // 使用 yaml.Marshal 并设置 yaml.FlowStyle 来获取单行格式
+                yamlBytes, err := yaml.Marshal(proxy)
                 if err != nil {
                     log.Printf("转换代理为YAML失败: %v", err)
                     continue
                 }
-                proxyStr := string(proxyYAML)
+                
+                // 将 YAML 转换为单行格式
+                var proxyMap map[string]interface{}
+                err = yaml.Unmarshal(yamlBytes, &proxyMap)
+                if err != nil {
+                    log.Printf("解析代理YAML失败: %v", err)
+                    continue
+                }
+                
+                singleLineYAML, err := yaml.Marshal(proxyMap)
+                if err != nil {
+                    log.Printf("转换代理为单行YAML失败: %v", err)
+                    continue
+                }
+                
+                proxyStr := strings.TrimSpace(string(singleLineYAML))
+                proxyStr = strings.TrimPrefix(proxyStr, "{")
+                proxyStr = strings.TrimSuffix(proxyStr, "}")
+                proxyStr = "{" + proxyStr + "}"
+
                 proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
                 atomic.AddInt64(&totalProxies, 1)
 
                 if i < 3 {
-                    log.Printf("示例代理 %d:\n%s", i+1, proxyStr)
+                    log.Printf("示例代理 %d: %s", i+1, proxyStr)
                 }
                 if i == 2 {
                     break // 只显示前三个
