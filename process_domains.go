@@ -14,9 +14,6 @@ import (
     "sync"
     "sync/atomic"
     "time"
-
-    "golang.org/x/text/encoding/simplifiedchinese"
-    "golang.org/x/text/transform"
 )
 
 func main() {
@@ -127,7 +124,6 @@ func readDomains(inputFile string) *sync.Map {
 	return domains // 返回处理后的域名列表
 }
 
-
 func checkDomains(domains *sync.Map) *sync.Map {
     const (
         concurrency      = 50
@@ -136,7 +132,6 @@ func checkDomains(domains *sync.Map) *sync.Map {
         tcpRetries       = 3
         httpRetries      = 2
         progressInterval = 5 * time.Second
-        bufferSize       = 4096
     )
 
     validDomains := &sync.Map{}
@@ -226,33 +221,15 @@ func checkDomains(domains *sync.Map) *sync.Map {
             }
             defer resp.Body.Close()
 
-            // 检查编码和内容
-            contentType := resp.Header.Get("Content-Type")
-            var reader io.Reader = resp.Body
-            if strings.Contains(contentType, "gbk") || strings.Contains(contentType, "gb2312") {
-                reader = transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder())
+            // 读取整个响应体
+            body, err := io.ReadAll(resp.Body)
+            if err != nil {
+                return
             }
 
-            keywords := []string{"Sansui233", "vmess"}
-            buffer := make([]byte, bufferSize)
-            keywordFound := make([]bool, len(keywords))
-            for {
-                n, err := reader.Read(buffer)
-                if err != nil && err != io.EOF {
-                    return
-                }
-                content := strings.ToLower(string(buffer[:n]))
-                for i, keyword := range keywords {
-                    if !keywordFound[i] && strings.Contains(content, keyword) {
-                        keywordFound[i] = true
-                    }
-                }
-                if err == io.EOF || (keywordFound[0] && keywordFound[1]) {
-                    break
-                }
-            }
-
-            if keywordFound[0] && keywordFound[1] {
+            // 转换为小写并检查关键词
+            content := strings.ToLower(string(body))
+            if strings.Contains(content, "sansui233") && strings.Contains(content, "vmess") {
                 validDomains.Store(domain, struct{}{})
                 atomic.AddInt64(&validCount, 1)
             }
