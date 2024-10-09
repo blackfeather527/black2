@@ -207,31 +207,30 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 time.Sleep(time.Second)
             }
 
-            // HTTP GET 请求（带重试）
+            // 检查 vmess/sub 路径
+            subURL := domain + "/vmess/sub"
             var resp *http.Response
             for i := 0; i < httpRetries; i++ {
-                resp, err = client.Get(domain)
+                req, err := http.NewRequest("HEAD", subURL, nil)
+                if err != nil {
+                    continue
+                }
+                resp, err = client.Do(req)
                 if err == nil {
+                    defer resp.Body.Close()
+                    if resp.StatusCode == http.StatusOK {
+                        contentType := resp.Header.Get("Content-Type")
+                        if strings.Contains(strings.ToLower(contentType), "text/") {
+                            validDomains.Store(domain, struct{}{})
+                            atomic.AddInt64(&validCount, 1)
+                        }
+                    }
                     break
                 }
                 if i == httpRetries-1 {
                     return
                 }
                 time.Sleep(time.Second)
-            }
-            defer resp.Body.Close()
-
-            // 读取整个响应体
-            body, err := io.ReadAll(resp.Body)
-            if err != nil {
-                return
-            }
-
-            // 转换为小写并检查关键词
-            content := strings.ToLower(string(body))
-            if strings.Contains(content, "sansui233") && strings.Contains(content, "vmess") {
-                validDomains.Store(domain, struct{}{})
-                atomic.AddInt64(&validCount, 1)
             }
         }(key.(string))
         return true
