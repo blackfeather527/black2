@@ -236,15 +236,12 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 }
                 proxyStr := string(proxyJSON)
                 proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
-                atomic.AddInt64(&totalProxies, 1)
 
                 if i < 3 {
                     log.Printf("示例代理 %d: %s", i+1, proxyStr)
                 }
-                if i == 2 {
-                    break // 只显示前三个
-                }
             }
+            atomic.AddInt64(&totalProxies, int64(len(config.Proxies)))
             log.Printf("从 %s 总共解析到 %d 个代理", url, len(config.Proxies))
         }(key.(string))
         return true
@@ -255,7 +252,6 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
     log.Printf("总共获取到 %d 个代理信息", atomic.LoadInt64(&totalProxies))
     return proxiesMap
 }
-
 // 递归转换函数
 func convertToStringKeysRecursive(v interface{}) interface{} {
     switch v := v.(type) {
