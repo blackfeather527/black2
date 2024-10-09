@@ -12,6 +12,8 @@ import (
     "sync"
     "sync/atomic"
     "time"
+
+    "gopkg.in/yaml.v2"
 )
 
 func main() {
@@ -47,21 +49,15 @@ func main() {
 	// 检查域名
 	validDomains := checkDomains(domains)
 
-	// 统计有效域名数量
-	validDomainCount := 0
-	validDomains.Range(func(key, value interface{}) bool {
-		validDomainCount++
-		return true
-	})
-	log.Printf("检测通过的有效域名数: %d", validDomainCount)
+	    proxiesMap := fetchAndParseProxies(validDomains)
 
-	// 这里可以添加后续处理逻辑，例如将有效域名写入文件或数据库
-	// 为了示例，我们只打印一些信息
-	log.Printf("有效域名列表:")
-	validDomains.Range(func(key, value interface{}) bool {
-		log.Printf("- %s", key)
-		return true
-	})
+    // 输出代理数量
+    proxyCount := 0
+    proxiesMap.Range(func(key, value interface{}) bool {
+        proxyCount++
+        return true
+    })
+    log.Printf("成功解析的代理数量: %d", proxyCount)
 
 	// 注意：outputDir, dbFile, errorThreshold, 和 refreshDays 
 	// 在这个示例中没有被直接使用，但它们可能在后续的功能实现中用到
@@ -164,4 +160,87 @@ func checkDomains(domains *sync.Map) *sync.Map {
     wg.Wait(); cancel()
     log.Printf("最终结果：总数 %d，成功 %d", atomic.LoadInt64(&total), atomic.LoadInt64(&success))
     return validDomains
+}
+
+func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
+    const (
+        concurrency = 50
+        timeout     = 10 * time.Second
+        proxyPath   = "/clash/proxies"
+    )
+
+    proxiesMap := &sync.Map{}
+    totalProxies := int64(0)
+    var wg sync.WaitGroup
+    sem := make(chan struct{}, concurrency)
+
+    client := &http.Client{
+        Timeout: timeout,
+        Transport: &http.Transport{
+            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+        },
+    }
+
+    validDomains.Range(func(key, _ interface{}) bool {
+        wg.Add(1)
+        go func(domain string) {
+            defer wg.Done()
+            sem <- struct{}{}
+            defer func() { <-sem }()
+
+            url := domain + proxyPath
+            resp, err := client.Get(url)
+            if err != nil {
+                log.Printf("获取 %s 失败: %v", url, err)
+                return
+            }
+            defer resp.Body.Close()
+
+            if resp.StatusCode != http.StatusOK {
+                log.Printf("%s 返回非200状态码: %d", url, resp.StatusCode)
+                return
+            }
+
+            body, err := ioutil.ReadAll(resp.Body)
+            if err != nil {
+                log.Printf("读取 %s 的响应体失败: %v", url, err)
+                return
+            }
+
+            var config map[string]interface{}
+            err = yaml.Unmarshal(body, &config)
+            if err != nil {
+                log.Printf("解析 %s 的YAML失败: %v", url, err)
+                return
+            }
+
+            proxies, ok := config["proxies"].([]interface{})
+            if !ok {
+                log.Printf("%s 中没有找到有效的proxies段", url)
+                return
+            }
+
+            log.Printf("从 %s 获取到配置文件", url)
+            for i, proxy := range proxies {
+                if proxyStr, ok := proxy.(string); ok {
+                    proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
+                    atomic.AddInt64(&totalProxies, 1)
+
+                    if i < 3 {
+                        log.Printf("示例代理 %d: %s", i+1, proxyStr)
+                    }
+                }
+                if i == 2 {
+                    break // 只显示前三个
+                }
+            }
+            log.Printf("从 %s 总共解析到 %d 个代理", url, len(proxies))
+        }(key.(string))
+        return true
+    })
+
+    wg.Wait()
+
+    log.Printf("总共获取到 %d 个代理信息", atomic.LoadInt64(&totalProxies))
+    return proxiesMap
 }
