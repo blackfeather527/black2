@@ -12,7 +12,6 @@ import (
     "net/http"
     "net/url"
     "os"
-    "encoding/json"
     "strings"
     "sync"
     "sync/atomic"
