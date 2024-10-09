@@ -233,7 +233,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
                 reader = transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder())
             }
 
-            keywords := []string{"sansui233", "目前共有抓取源"}
+            keywords := []string{"Sansui233", "vmess"}
             buffer := make([]byte, bufferSize)
             keywordFound := make([]bool, len(keywords))
             for {
