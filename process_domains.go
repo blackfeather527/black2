@@ -185,6 +185,10 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
         },
     }
 
+    // 创建一个 JSON 风格的 YAML 编码器
+    jsonStyleEncoder := yaml.NewEncoder(ioutil.Discard)
+    jsonStyleEncoder.SetIndent(0) // 设置缩进为 0，确保输出为单行
+
     validDomains.Range(func(key, _ interface{}) bool {
         wg.Add(1)
         go func(domain string) {
@@ -226,33 +230,15 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
             log.Printf("从 %s 获取到配置文件", url)
             for i, proxy := range proxies {
-                // 使用 yaml.Marshal 并设置 yaml.Flow 来获取单行格式
-                yamlBytes, err := yaml.Marshal(proxy)
-                if err != nil {
-                    log.Printf("转换代理为YAML失败: %v", err)
-                    continue
-                }
-                
-                var proxyMap map[string]interface{}
-                err = yaml.Unmarshal(yamlBytes, &proxyMap)
-                if err != nil {
-                    log.Printf("解析代理YAML失败: %v", err)
-                    continue
-                }
-                
-                // 使用 yaml.NewEncoder 并设置 Flow 样式
                 var buf bytes.Buffer
-                encoder := yaml.NewEncoder(&buf)
-                encoder.SetIndent(0) // 设置缩进为0
-                encoder.SetFlow(true) // 设置为流式样式（单行）
-                err = encoder.Encode(proxyMap)
+                jsonStyleEncoder.Out = &buf
+                err = jsonStyleEncoder.Encode(proxy)
                 if err != nil {
-                    log.Printf("转换代理为单行YAML失败: %v", err)
+                    log.Printf("转换代理为JSON风格YAML失败: %v", err)
                     continue
                 }
-                
                 proxyStr := strings.TrimSpace(buf.String())
-
+                
                 proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
                 atomic.AddInt64(&totalProxies, 1)
 
