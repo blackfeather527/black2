@@ -213,7 +213,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
             }
 
             var config struct {
-                Proxies []map[string]interface{} `yaml:"proxies"`
+                Proxies []interface{} `yaml:"proxies"`
             }
             err = yaml.Unmarshal(body, &config)
             if err != nil {
@@ -228,18 +228,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
             log.Printf("从 %s 获取到配置文件", url)
             for i, proxy := range config.Proxies {
-                // 转换 map[interface{}]interface{} 为 map[string]interface{}
-                stringProxy := make(map[string]interface{})
-                for k, v := range proxy {
-                    switch key := k.(type) {
-                    case string:
-                        stringProxy[key] = convertToStringKeysRecursive(v)
-                    default:
-                        // 如果键不是字符串，我们将其转换为字符串
-                        stringProxy[fmt.Sprintf("%v", k)] = convertToStringKeysRecursive(v)
-                    }
-                }
-
+                stringProxy := convertToStringKeysRecursive(proxy)
                 proxyJSON, err := json.Marshal(stringProxy)
                 if err != nil {
                     log.Printf("转换代理为JSON失败: %v", err)
