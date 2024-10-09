@@ -210,34 +210,33 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 return
             }
 
-            var config map[string]interface{}
+            var config struct {
+                Proxies []string `yaml:"proxies"`
+            }
             err = yaml.Unmarshal(body, &config)
             if err != nil {
                 log.Printf("解析 %s 的YAML失败: %v", url, err)
                 return
             }
 
-            proxies, ok := config["proxies"].([]interface{})
-            if !ok {
-                log.Printf("%s 中没有找到有效的proxies段", url)
+            if len(config.Proxies) == 0 {
+                log.Printf("%s 中没有找到有效的proxies", url)
                 return
             }
 
             log.Printf("从 %s 获取到配置文件", url)
-            for i, proxy := range proxies {
-                if proxyStr, ok := proxy.(string); ok {
-                    proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
-                    atomic.AddInt64(&totalProxies, 1)
+            for i, proxyStr := range config.Proxies {
+                proxiesMap.Store(domain+"|"+proxyStr, struct{}{})
+                atomic.AddInt64(&totalProxies, 1)
 
-                    if i < 3 {
-                        log.Printf("示例代理 %d: %s", i+1, proxyStr)
-                    }
+                if i < 3 {
+                    log.Printf("示例代理 %d: %s", i+1, proxyStr)
                 }
                 if i == 2 {
                     break // 只显示前三个
                 }
             }
-            log.Printf("从 %s 总共解析到 %d 个代理", url, len(proxies))
+            log.Printf("从 %s 总共解析到 %d 个代理", url, len(config.Proxies))
         }(key.(string))
         return true
     })
