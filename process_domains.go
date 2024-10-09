@@ -124,78 +124,44 @@ func readDomains(inputFile string) *sync.Map {
 
 func checkDomains(domains *sync.Map) *sync.Map {
     const (
-        concurrency      = 50
-        tcpTimeout       = 5 * time.Second
-        tcpRetries       = 3
-        progressInterval = 5 * time.Second
+        concurrency, tcpTimeout, tcpRetries, reportInterval = 50, 5 * time.Second, 3, 5 * time.Second
     )
-
-    validDomains := &sync.Map{}
-    var totalCount, tcpSuccessCount int64
-    var wg sync.WaitGroup
-    semaphore := make(chan struct{}, concurrency)
-
+    validDomains, total, success := &sync.Map{}, int64(0), int64(0)
     ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
 
-    // 进度报告
     go func() {
-        ticker := time.NewTicker(progressInterval)
-        defer ticker.Stop()
-        for {
+        for range time.Tick(reportInterval) {
             select {
-            case <-ctx.Done():
-                return
-            case <-ticker.C:
-                log.Printf("进度: 总数 %d, TCP 成功 %d", 
-                           atomic.LoadInt64(&totalCount), 
-                           atomic.LoadInt64(&tcpSuccessCount))
+            case <-ctx.Done(): return
+            default: log.Printf("进度：总数 %d，成功 %d", atomic.LoadInt64(&total), atomic.LoadInt64(&success))
             }
         }
     }()
 
-    dialer := &net.Dialer{Timeout: tcpTimeout}
+    var wg sync.WaitGroup
+    sem, dialer := make(chan struct{}, concurrency), &net.Dialer{Timeout: tcpTimeout}
 
-    domains.Range(func(key, value interface{}) bool {
+    domains.Range(func(key, _ interface{}) bool {
         wg.Add(1)
         go func(domain string) {
-            defer wg.Done()
-            semaphore <- struct{}{}
-            defer func() { <-semaphore }()
-
-            atomic.AddInt64(&totalCount, 1)
-
+            defer wg.Done(); sem <- struct{}{}; defer func() { <-sem }()
+            atomic.AddInt64(&total, 1)
             u, err := url.Parse(domain)
-            if err != nil {
-                return
-            }
+            if err != nil { return }
             host, port := u.Hostname(), u.Port()
-            if port == "" {
-                port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
-            }
-
-            // TCP 连接测试（带重试）
+            if port == "" { port = map[string]string{"https": "443", "http": "80"}[u.Scheme] }
             for i := 0; i < tcpRetries; i++ {
-                conn, err := dialer.Dial("tcp", net.JoinHostPort(host, port))
-                if err == nil {
-                    conn.Close()
-                    atomic.AddInt64(&tcpSuccessCount, 1)
-                    validDomains.Store(domain, struct{}{})
-                    return
+                if conn, err := dialer.Dial("tcp", net.JoinHostPort(host, port)); err == nil {
+                    conn.Close(); validDomains.Store(domain, struct{}{}); atomic.AddInt64(&success, 1); return
                 }
-                if i < tcpRetries-1 {
-                    time.Sleep(time.Second)
-                }
+                time.Sleep(time.Second)
             }
         }(key.(string))
         return true
     })
 
-    wg.Wait()
-    cancel()
-
-    log.Printf("总共检测的域名数: %d", atomic.LoadInt64(&totalCount))
-    log.Printf("TCP 连接成功的域名数: %d", atomic.LoadInt64(&tcpSuccessCount))
-
+    wg.Wait(); cancel()
+    log.Printf("最终结果：总数 %d，成功 %d", atomic.LoadInt64(&total), atomic.LoadInt64(&success))
     return validDomains
 }
