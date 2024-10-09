@@ -127,6 +127,7 @@ func readDomains(inputFile string) *sync.Map {
 	return domains // 返回处理后的域名列表
 }
 
+
 func checkDomains(domains *sync.Map) *sync.Map {
     const (
         concurrency      = 50
@@ -140,7 +141,8 @@ func checkDomains(domains *sync.Map) *sync.Map {
 
     validDomains, wg := &sync.Map{}, sync.WaitGroup{}
     var totalCount, tcpSuccessCount, validCount int64
-    semaphore, ctx, cancel := make(chan struct{}, concurrency), context.WithCancel(context.Background()), func() {}
+    semaphore := make(chan struct{}, concurrency)
+    ctx, cancel := context.WithCancel(context.Background())
     defer cancel()
 
     go func() {
