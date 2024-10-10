@@ -256,7 +256,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
             server, _ := v["server"].(string)
             port, _ := v["port"].(string)
-            addr := fmt.Sprintf("%s:%s", server, port)
+            addr := fmt.Sprintf("%s:%v", server, v["port"])
 	    log.Printf("检测地址:%s",addr)
             for i := 0; i < 3; i++ { // 重试 3 次
                 conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
