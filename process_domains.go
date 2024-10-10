@@ -216,6 +216,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                     }
                     if _, loaded := proxiesMap.LoadOrStore(key, proxy); !loaded {
                         atomic.AddInt64(&stats.unique, 1)
+			log.Printf("有效代理: %s", key)
                     } else {
                         siteDuplicates++
                         atomic.AddInt64(&stats.duplicates, 1)
