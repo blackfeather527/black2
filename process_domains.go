@@ -195,16 +195,11 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
             url := domain + proxyPath
             resp, err := client.Get(url)
-            if err != nil {
-                log.Printf("获取 %s 失败: %v", url, err)
+            if err != nil || resp.StatusCode != http.StatusOK {
+                log.Printf("获取 %s 失败: %v, 状态码: %d", url, err, resp.StatusCode)
                 return
             }
             defer resp.Body.Close()
-
-            if resp.StatusCode != http.StatusOK {
-                log.Printf("%s 返回非200状态码: %d", url, resp.StatusCode)
-                return
-            }
 
             body, err := ioutil.ReadAll(resp.Body)
             if err != nil {
@@ -215,8 +210,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
             var config struct {
                 Proxies []map[string]interface{} `yaml:"proxies"`
             }
-            err = yaml.Unmarshal(body, &config)
-            if err != nil {
+            if err := yaml.Unmarshal(body, &config); err != nil {
                 log.Printf("解析 %s 的YAML失败: %v", url, err)
                 return
             }
@@ -230,6 +224,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 key := generateProxyKey(proxy)
                 if key != "" {
                     proxiesMap.Store(key, proxy)
+                    log.Printf("生成的代理key: %s", key)
                 }
             }
 
