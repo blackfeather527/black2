@@ -195,11 +195,20 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
             url := domain + proxyPath
             resp, err := client.Get(url)
-            if err != nil || resp.StatusCode != http.StatusOK {
-                log.Printf("获取 %s 失败: %v, 状态码: %d", url, err, resp.StatusCode)
+            if err != nil {
+                log.Printf("获取 %s 失败: %v", url, err)
+                return
+            }
+            if resp == nil {
+                log.Printf("获取 %s 失败: 响应为空", url)
                 return
             }
             defer resp.Body.Close()
+
+            if resp.StatusCode != http.StatusOK {
+                log.Printf("%s 返回非200状态码: %d", url, resp.StatusCode)
+                return
+            }
 
             body, err := ioutil.ReadAll(resp.Body)
             if err != nil {
@@ -248,21 +257,26 @@ func generateProxyKey(proxy map[string]interface{}) string {
         return ""
     }
 
+    server, _ := proxy["server"].(string)
+    port, _ := proxy["port"].(float64)
+    password, _ := proxy["password"].(string)
+
     switch proxyType {
     case "ss":
-        return fmt.Sprintf("ss|%s|%v|%s|%s",
-            proxy["server"], proxy["port"], proxy["password"], proxy["cipher"])
+        cipher, _ := proxy["cipher"].(string)
+        return fmt.Sprintf("ss|%s|%.0f|%s|%s", server, port, password, cipher)
     case "ssr":
-        return fmt.Sprintf("ssr|%s|%v|%s|%s|%s|%s",
-            proxy["server"], proxy["port"], proxy["password"], proxy["cipher"],
-            proxy["protocol"], proxy["obfs"])
+        cipher, _ := proxy["cipher"].(string)
+        protocol, _ := proxy["protocol"].(string)
+        obfs, _ := proxy["obfs"].(string)
+        return fmt.Sprintf("ssr|%s|%.0f|%s|%s|%s|%s", server, port, password, cipher, protocol, obfs)
     case "vmess":
-        return fmt.Sprintf("vmess|%s|%v|%s|%v",
-            proxy["server"], proxy["port"], proxy["uuid"], proxy["alterId"])
+        uuid, _ := proxy["uuid"].(string)
+        alterId, _ := proxy["alterId"].(float64)
+        return fmt.Sprintf("vmess|%s|%.0f|%s|%.0f", server, port, uuid, alterId)
     case "trojan":
         sni, _ := proxy["sni"].(string)
-        return fmt.Sprintf("trojan|%s|%v|%s|%s",
-            proxy["server"], proxy["port"], proxy["password"], sni)
+        return fmt.Sprintf("trojan|%s|%.0f|%s|%s", server, port, password, sni)
     default:
         return ""
     }
