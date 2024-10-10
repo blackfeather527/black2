@@ -6,7 +6,6 @@ import (
     "context"
     "crypto/tls"
     "flag"
-    "io/ioutil"
     "log"
     "net"
     "net/http"
