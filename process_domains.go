@@ -166,7 +166,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
 }
 
 func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
-    proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates int64 }{}
+    proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates, available int64 }{}
     var wg sync.WaitGroup
     sem := make(chan struct{}, 50)
     client := &http.Client{
@@ -216,7 +216,6 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                     }
                     if _, loaded := proxiesMap.LoadOrStore(key, proxy); !loaded {
                         atomic.AddInt64(&stats.unique, 1)
-			log.Printf("有效代理: %s", key)
                     } else {
                         siteDuplicates++
                         atomic.AddInt64(&stats.duplicates, 1)
@@ -229,7 +228,37 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
     })
 
     wg.Wait()
-    log.Printf("成功站点: %d, 总代理: %d, 唯一代理: %d, 总重复代理: %d", 
-               stats.sites, stats.total, stats.unique, stats.duplicates)
+
+    // TCPing 测试
+    tcpingSem := make(chan struct{}, 200) // 限制并发 TCPing 的数量
+    proxiesMap.Range(func(key, value interface{}) bool {
+        wg.Add(1)
+        go func(k string, v map[string]interface{}) {
+            defer wg.Done()
+            tcpingSem <- struct{}{}
+            defer func() { <-tcpingSem }()
+
+            server, _ := v["server"].(string)
+            port, _ := v["port"].(float64)
+            addr := fmt.Sprintf("%s:%.0f", server, port)
+
+            for i := 0; i < 3; i++ { // 重试 3 次
+                conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
+                if err == nil {
+                    conn.Close()
+                    atomic.AddInt64(&stats.available, 1)
+                    return
+                }
+                time.Sleep(1 * time.Second)
+            }
+            proxiesMap.Delete(k) // 如果 3 次都失败，删除这个代理
+        }(key.(string), value.(map[string]interface{}))
+        return true
+    })
+
+    wg.Wait()
+
+    log.Printf("成功站点: %d, 总代理: %d, 唯一代理: %d, 总重复代理: %d, 可用代理: %d", 
+               stats.sites, stats.total, stats.unique, stats.duplicates, stats.available)
     return proxiesMap
 }
