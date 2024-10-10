@@ -166,7 +166,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
 }
 
 func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
-    proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates, available int64 }{}
+    proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates, available, checked int64 }{}
     var wg sync.WaitGroup
     sem := make(chan struct{}, 50)
     client := &http.Client{
@@ -229,6 +229,22 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 
     wg.Wait()
 
+    // 启动进度显示 goroutine
+    done := make(chan bool)
+    go func() {
+        ticker := time.NewTicker(1 * time.Second)
+        defer ticker.Stop()
+        for {
+            select {
+            case <-done:
+                return
+            case <-ticker.C:
+                log.Printf("进度: 总数 %d, 已检测 %d, 可用 %d", 
+                           stats.unique, stats.checked, stats.available)
+            }
+        }
+    }()
+
     // TCPing 测试
     tcpingSem := make(chan struct{}, 200) // 限制并发 TCPing 的数量
     proxiesMap.Range(func(key, value interface{}) bool {
@@ -247,18 +263,21 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 if err == nil {
                     conn.Close()
                     atomic.AddInt64(&stats.available, 1)
+                    atomic.AddInt64(&stats.checked, 1)
                     return
                 }
                 time.Sleep(1 * time.Second)
             }
+            atomic.AddInt64(&stats.checked, 1)
             proxiesMap.Delete(k) // 如果 3 次都失败，删除这个代理
         }(key.(string), value.(map[string]interface{}))
         return true
     })
 
     wg.Wait()
+    done <- true // 停止进度显示
 
-    log.Printf("成功站点: %d, 总代理: %d, 唯一代理: %d, 总重复代理: %d, 可用代理: %d", 
+    log.Printf("最终结果: 成功站点: %d, 总代理: %d, 唯一代理: %d, 总重复代理: %d, 可用代理: %d", 
                stats.sites, stats.total, stats.unique, stats.duplicates, stats.available)
     return proxiesMap
 }
