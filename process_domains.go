@@ -167,133 +167,60 @@ func checkDomains(domains *sync.Map) *sync.Map {
 }
 
 func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
-    const (
-        concurrency = 50
-        timeout     = 10 * time.Second
-        proxyPath   = "/clash/proxies"
-    )
-
-    proxiesMap := &sync.Map{}
-    totalProxies := int64(0)
-    uniqueProxies := int64(0)
-    successfulSites := int64(0)
-    totalDuplicates := int64(0)
+    proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates int64 }{}
     var wg sync.WaitGroup
-    sem := make(chan struct{}, concurrency)
-
-    client := &http.Client{
-        Timeout: timeout,
-        Transport: &http.Transport{
-            TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-        },
-    }
+    sem := make(chan struct{}, 50)
+    client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
 
     validDomains.Range(func(key, _ interface{}) bool {
         wg.Add(1)
         go func(domain string) {
             defer wg.Done()
-            sem <- struct{}{}
-            defer func() { <-sem }()
-
-            url := domain + proxyPath
-            resp, err := client.Get(url)
-            if err != nil {
-                log.Printf("获取 %s 失败: %v", url, err)
-                return
-            }
-            if resp == nil {
-                log.Printf("获取 %s 失败: 响应为空", url)
+            sem <- struct{}{}; defer func() { <-sem }()
+            resp, err := client.Get(domain + "/clash/proxies")
+            if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
+                log.Printf("获取 %s 失败: %v", domain, err)
                 return
             }
             defer resp.Body.Close()
-
-            if resp.StatusCode != http.StatusOK {
-                log.Printf("%s 返回非200状态码: %d", url, resp.StatusCode)
+            var config struct{ Proxies []map[string]interface{} `yaml:"proxies"` }
+            if err := yaml.NewDecoder(resp.Body).Decode(&config); err != nil || len(config.Proxies) == 0 {
+                log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
                 return
             }
-
-            body, err := ioutil.ReadAll(resp.Body)
-            if err != nil {
-                log.Printf("读取 %s 的响应体失败: %v", url, err)
-                return
-            }
-
-            var config struct {
-                Proxies []map[string]interface{} `yaml:"proxies"`
-            }
-            if err := yaml.Unmarshal(body, &config); err != nil {
-                log.Printf("解析 %s 的YAML失败: %v", url, err)
-                return
-            }
-
-            if len(config.Proxies) == 0 {
-                log.Printf("%s 中没有找到有效的proxies", url)
-                return
-            }
-
-            atomic.AddInt64(&successfulSites, 1)
-
-            siteTotalProxies := int64(0)
-            siteDuplicates := int64(0)
-
+            atomic.AddInt64(&stats.sites, 1)
+            siteDuplicates := 0
             for _, proxy := range config.Proxies {
-                key := generateProxyKey(proxy)
-                if key != "" {
-                    if _, loaded := proxiesMap.LoadOrStore(key, proxy); loaded {
-                        atomic.AddInt64(&siteDuplicates, 1)
-                    } else {
-                        atomic.AddInt64(&uniqueProxies, 1)
+                atomic.AddInt64(&stats.total, 1)
+                if proxyType, ok := proxy["type"].(string); ok {
+                    key := fmt.Sprintf("%s|%v|%v|%v", proxyType, proxy["server"], proxy["port"], proxy["password"])
+                    switch proxyType {
+                    case "ss":
+                        key += fmt.Sprintf("|%v", proxy["cipher"])
+                    case "ssr":
+                        key += fmt.Sprintf("|%v|%v|%v", proxy["cipher"], proxy["protocol"], proxy["obfs"])
+                    case "vmess":
+                        key += fmt.Sprintf("|%v|%v", proxy["uuid"], proxy["alterId"])
+                    case "trojan":
+                        key += fmt.Sprintf("|%v", proxy["sni"])
+                    default:
+                        continue
                     }
-                    atomic.AddInt64(&siteTotalProxies, 1)
+                    if _, loaded := proxiesMap.LoadOrStore(key, proxy); !loaded {
+                        atomic.AddInt64(&stats.unique, 1)
+                    } else {
+                        siteDuplicates++
+                        atomic.AddInt64(&stats.duplicates, 1)
+                    }
                 }
             }
-
-            atomic.AddInt64(&totalProxies, siteTotalProxies)
-            atomic.AddInt64(&totalDuplicates, siteDuplicates)
-
-            log.Printf("从 %s 总共解析到 %d 个代理，其中重复 %d 个", url, siteTotalProxies, siteDuplicates)
+            log.Printf("从 %s 解析到 %d 个代理，其中重复 %d 个", domain, len(config.Proxies), siteDuplicates)
         }(key.(string))
         return true
     })
 
     wg.Wait()
-
-    log.Printf("成功获取配置文件的网站数量: %d", atomic.LoadInt64(&successfulSites))
-    log.Printf("总共获取到 %d 个代理信息", atomic.LoadInt64(&totalProxies))
-    log.Printf("去重后的代理数量: %d", atomic.LoadInt64(&uniqueProxies))
-    log.Printf("总重复的代理数量: %d", atomic.LoadInt64(&totalDuplicates))
-
+    log.Printf("成功站点: %d, 总代理: %d, 唯一代理: %d, 总重复代理: %d", 
+               stats.sites, stats.total, stats.unique, stats.duplicates)
     return proxiesMap
 }
-
-func generateProxyKey(proxy map[string]interface{}) string {
-    proxyType, ok := proxy["type"].(string)
-    if !ok {
-        return ""
-    }
-
-    server, _ := proxy["server"].(string)
-    port, _ := proxy["port"].(float64)
-    password, _ := proxy["password"].(string)
-
-    switch proxyType {
-    case "ss":
-        cipher, _ := proxy["cipher"].(string)
-        return fmt.Sprintf("ss|%s|%.0f|%s|%s", server, port, password, cipher)
-    case "ssr":
-        cipher, _ := proxy["cipher"].(string)
-        protocol, _ := proxy["protocol"].(string)
-        obfs, _ := proxy["obfs"].(string)
-        return fmt.Sprintf("ssr|%s|%.0f|%s|%s|%s|%s", server, port, password, cipher, protocol, obfs)
-    case "vmess":
-        uuid, _ := proxy["uuid"].(string)
-        alterId, _ := proxy["alterId"].(float64)
-        return fmt.Sprintf("vmess|%s|%.0f|%s|%.0f", server, port, uuid, alterId)
-    case "trojan":
-        sni, _ := proxy["sni"].(string)
-        return fmt.Sprintf("trojan|%s|%.0f|%s|%s", server, port, password, sni)
-    default:
-        return ""
-    }
-}
-
