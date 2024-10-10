@@ -169,14 +169,23 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
     proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates int64 }{}
     var wg sync.WaitGroup
     sem := make(chan struct{}, 50)
-    client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}}
+    client := &http.Client{
+        Timeout: 10 * time.Second,
+        Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+    }
 
     validDomains.Range(func(key, _ interface{}) bool {
         wg.Add(1)
         go func(domain string) {
             defer wg.Done()
             sem <- struct{}{}; defer func() { <-sem }()
-            resp, err := client.Get(domain + "/clash/proxies")
+            req, err := http.NewRequest("GET", domain+"/clash/proxies", nil)
+            if err != nil {
+                log.Printf("创建请求失败 %s: %v", domain, err)
+                return
+            }
+            req.Header.Set("User-Agent", "ClashForAndroid/2.5.12")
+            resp, err := client.Do(req)
             if err != nil || resp == nil || resp.StatusCode != http.StatusOK {
                 log.Printf("获取 %s 失败: %v", domain, err)
                 return
