@@ -2,6 +2,7 @@ package main
 
 import (
     "bufio"
+    "io"
     "fmt"
     "context"
     "crypto/tls"
@@ -16,6 +17,7 @@ import (
     "sync/atomic"
     "time"
 
+    c "github.com/metacubex/mihomo/config"
     "gopkg.in/yaml.v2"
 )
 
@@ -191,6 +193,14 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 return
             }
             defer resp.Body.Close()
+	    rawConfig, err := c.UnmarshalRawConfig(resp.Body)
+	    if err != nil {
+		log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
+		return
+	    }
+
+	    _ , _ , err = c.parseProxies(rawConfig)
+	    log.Printf("解析 %s 测试结果: %v", domain, err)
             var config struct{ Proxies []map[string]interface{} `yaml:"proxies"` }
             if err := yaml.NewDecoder(resp.Body).Decode(&config); err != nil || len(config.Proxies) == 0 {
                 log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
