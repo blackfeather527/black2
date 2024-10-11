@@ -193,13 +193,16 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                 return
             }
             defer resp.Body.Close()
-	    rawConfig, err := c.UnmarshalRawConfig(resp.Body)
+	    bodyBytes, err := io.ReadAll(resp.Body)
 	    if err != nil {
-		log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
-		return
+	        rawConfig, err2 := c.UnmarshalRawConfig(resp.Body)
+	        if err2 != nil {
+		    log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err2)
+		    return
+	        }
 	    }
 
-	    _ , _ , err = c.parseProxies(rawConfig)
+	    _ , err = c.ParseRawConfig(rawConfig)
 	    log.Printf("解析 %s 测试结果: %v", domain, err)
             var config struct{ Proxies []map[string]interface{} `yaml:"proxies"` }
             if err := yaml.NewDecoder(resp.Body).Decode(&config); err != nil || len(config.Proxies) == 0 {
