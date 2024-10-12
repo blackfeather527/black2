@@ -205,7 +205,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 	    }
 	    _ , err = c.ParseRawConfig(rawConfig)
 	    log.Printf("解析 %s 测试结果: %v", domain, err)
-            var config struct{ Proxies []map[string]any `yaml:"proxies"` }
+            var config = Config{ Proxies []map[string]any{} `yaml:"proxies"` }
             if err := yaml.Unmarshal(bodyBytes, config.Proxies); err != nil|| len(config.Proxies) == 0 {
                 log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
                 return
