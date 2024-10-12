@@ -168,7 +168,7 @@ func checkDomains(domains *sync.Map) *sync.Map {
 }
 
 type Config struct {
-    Proxies map[string]any  `yaml:"proxies" json:"proxies"`
+    Proxies []map[string]any  `yaml:"proxies" json:"proxies"`
 }
 
 func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
