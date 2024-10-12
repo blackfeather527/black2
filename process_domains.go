@@ -18,7 +18,7 @@ import (
     "time"
 
     c "github.com/metacubex/mihomo/config"
-    "gopkg.in/yaml.v2"
+    "gopkg.in/yaml.v3"
 )
 
 func main() {
