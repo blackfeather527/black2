@@ -122,7 +122,12 @@ jobs:
       run: |
         cp /tmp/domains.db ./domains.db
         echo "已备份数据库到仓库根目录"
-
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      if: steps.update.outputs.status == 'success' && !cancelled()
+      with:
+        retain_days: 1
+        keep_minimum_runs: 3
     - name: Commit and push changes
       run: |
         # 配置Git并提交更改
