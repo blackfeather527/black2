@@ -208,7 +208,8 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
             for _, proxy := range rawConfig.Proxy {
                 atomic.AddInt64(&stats.total, 1)
                 if proxyType, ok := proxy["type"].(string); ok {
-                    key := fmt.Sprintf("%s|%v|%v|%v", proxyType, proxy["server"], proxy["port"], proxy["password"])
+		      key := fmt.Sprintf("%s|%v|%v", proxyType, proxy["server"], proxy["port"])
+                   /* key := fmt.Sprintf("%s|%v|%v|%v", proxyType, proxy["server"], proxy["port"], proxy["password"])
                     switch proxyType {
                     case "ss":
                         key += fmt.Sprintf("|%v", proxy["cipher"])
@@ -220,7 +221,8 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                         key += fmt.Sprintf("|%v", proxy["sni"])
                     default:
                         continue
-                    }
+                    }*/
+		
                     if _, loaded := proxiesMap.LoadOrStore(key, proxy); !loaded {
                         atomic.AddInt64(&stats.unique, 1)
                     } else {
