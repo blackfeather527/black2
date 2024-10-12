@@ -167,10 +167,6 @@ func checkDomains(domains *sync.Map) *sync.Map {
     return validDomains
 }
 
-type Config struct {
-    Proxies []map[string]any  `yaml:"proxies" json:"proxies"`
-}
-
 func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
     proxiesMap, stats := &sync.Map{}, struct{ total, unique, sites, duplicates, available, checked int64 }{}
     var wg sync.WaitGroup
@@ -203,20 +199,14 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
 	    }
              
 	    rawConfig, err := c.UnmarshalRawConfig(bodyBytes)
-	    if err != nil {
-	        log.Printf("解析 %s : %v", domain, err)
+	    if err != nil || len(rawConfig.Proxy) == 0 {
+	        log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
 	        return
 	    }
-	    _ , err = c.ParseRawConfig(rawConfig)
-	    log.Printf("解析 %s 测试结果: %v", domain, err)
-            var config = Config{ Proxies: []map[string]any{}, }
-            if err := yaml.Unmarshal(bodyBytes, config.Proxies); err != nil|| len(config.Proxies) == 0 {
-                log.Printf("解析 %s 的YAML失败或无有效代理: %v", domain, err)
-                return
-            }
+		
             atomic.AddInt64(&stats.sites, 1)
             siteDuplicates := 0
-            for _, proxy := range config.Proxies {
+            for _, proxy := range rawConfig.Proxy {
                 atomic.AddInt64(&stats.total, 1)
                 if proxyType, ok := proxy["type"].(string); ok {
                     key := fmt.Sprintf("%s|%v|%v|%v", proxyType, proxy["server"], proxy["port"], proxy["password"])
@@ -240,7 +230,7 @@ func fetchAndParseProxies(validDomains *sync.Map) *sync.Map {
                     }
                 }
             }
-            log.Printf("从 %s 解析到 %d 个代理，其中重复 %d 个", domain, len(config.Proxies), siteDuplicates)
+            log.Printf("从 %s 解析到 %d 个代理，其中重复 %d 个", domain, len(rawConfig.Proxy), siteDuplicates)
         }(key.(string))
         return true
     })
